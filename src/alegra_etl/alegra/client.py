@@ -218,24 +218,43 @@ class AlegraClient:
         page_size = self.settings.sync_page_size
         records: list[dict[str, Any]] = []
         start = 0
-        while True:
+        max_pages = 200  # 200 * 30 = 6000 docs/día tope de seguridad
+        page_num = 0
+
+        while page_num < max_pages:
+            page_num += 1
             try:
-                page, _ = await self.get_page(
+                page, meta = await self.get_page(
                     endpoint, start=start, limit=page_size, extra_params=params
                 )
             except AlegraClientError as exc:
                 if exc.status_code == 400 and start == 0:
-                    # Algunos endpoints no aceptan paginación con date; un solo intento.
-                    page, _ = await self.get_page(endpoint, start=0, limit=page_size, extra_params={"date": target_date})
+                    page, meta = await self.get_page(
+                        endpoint,
+                        start=0,
+                        limit=page_size,
+                        extra_params={"date": target_date},
+                    )
                     records.extend(page)
                     break
                 raise
             if not page:
                 break
             records.extend(page)
+            total = int(meta["total"]) if meta and "total" in meta else None
+            if total is not None and len(records) >= total:
+                break
             if len(page) < page_size:
                 break
             start += page_size
+        else:
+            logger.warning(
+                "Tope de paginación en %s date=%s (%s páginas); se continúa con %s registros",
+                endpoint,
+                target_date,
+                max_pages,
+                len(records),
+            )
         return records
 
 

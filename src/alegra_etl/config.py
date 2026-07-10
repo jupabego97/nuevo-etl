@@ -31,7 +31,8 @@ class Settings(BaseSettings):
         alias="ALEGRA_BASE_URL",
     )
 
-    sync_overlap_days: int = Field(default=7, alias="SYNC_OVERLAP_DAYS", ge=1, le=90)
+    # Ventana de solape para documentos (facturas, bills, etc.). 3 días = cron más corto/seguro.
+    sync_overlap_days: int = Field(default=3, alias="SYNC_OVERLAP_DAYS", ge=1, le=90)
     sync_page_size: int = Field(default=30, alias="SYNC_PAGE_SIZE", ge=1, le=30)
     sync_max_concurrent: int = Field(default=5, alias="SYNC_MAX_CONCURRENT", ge=1, le=20)
     sync_request_timeout_seconds: int = Field(

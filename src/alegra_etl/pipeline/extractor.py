@@ -73,20 +73,44 @@ class ResourceExtractor:
             if not start_date or not end_date:
                 end_date = date.today()
                 start_date = end_date - timedelta(days=self.settings.sync_overlap_days)
-            all_records: list[dict[str, Any]] = []
+            total_extracted = 0
+            total_loaded = 0
+            total_days = (end_date - start_date).days + 1
             current = start_date
+            day_index = 0
             while current <= end_date:
+                day_index += 1
+                print(
+                    f"[extract] {resource.name} día {current.isoformat()} "
+                    f"({day_index}/{total_days})...",
+                    flush=True,
+                )
                 day_records = await self.client.get_by_date(
                     resource.endpoint,
                     current.isoformat(),
                     extra_params=resource.extra_params,
                 )
+                print(
+                    f"[extract] {resource.name} {current.isoformat()}: "
+                    f"{len(day_records)} registros",
+                    flush=True,
+                )
+                # Raw liviano si el día es muy grande (evita OOM en Railway)
+                raw_payload = day_records
+                if len(day_records) > 100:
+                    raw_payload = {
+                        "count": len(day_records),
+                        "ids": [str(r.get("id")) for r in day_records if r.get("id") is not None][:500],
+                        "truncated": True,
+                    }
                 params = {"date": current.isoformat(), **resource.extra_params}
-                await self._store_raw(resource, 0, params, day_records)
-                all_records.extend(day_records)
+                await self._store_raw(resource, 0, params, raw_payload if isinstance(raw_payload, list) else [raw_payload])
+                loaded = self._transform_and_load(resource.name, day_records)
+                self.session.commit()
+                total_extracted += len(day_records)
+                total_loaded += loaded
                 current += timedelta(days=1)
-            loaded = self._transform_and_load(resource.name, all_records)
-            return {"extracted": len(all_records), "loaded": loaded}
+            return {"extracted": total_extracted, "loaded": total_loaded}
 
         records = await self.client.fetch_all_pages(
             resource.endpoint,
