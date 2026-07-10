@@ -186,9 +186,11 @@ class AlegraClient:
             if not page:
                 break
             all_records.extend(page)
-            if meta and "total" in meta and len(all_records) >= int(meta["total"]):
-                break
-            if len(page) < page_size:
+            total = int(meta["total"]) if meta and "total" in meta else None
+            if total is not None:
+                if len(all_records) >= total:
+                    break
+            elif len(page) < page_size:
                 break
             start += page_size
             # Seguridad ante bucles infinitos

@@ -24,11 +24,22 @@ async def test_fetch_all_pages_uses_offset_pagination(settings, httpx_mock):
     )
     httpx_mock.add_response(
         method="GET",
-        json=[{"id": "1"}, {"id": "2"}],
+        json={"data": [{"id": "2"}], "metadata": {"total": 2}},
     )
 
     async with AlegraClient(settings) as client:
         records = await client.fetch_all_pages("items", extra_params={"mode": "advanced"})
+    assert len(records) == 2
+    assert [r["id"] for r in records] == ["1", "2"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_all_pages_retries_without_order_on_400(settings, httpx_mock):
+    httpx_mock.add_response(method="GET", status_code=400, json={"message": "bad order"})
+    httpx_mock.add_response(method="GET", json=[{"id": "1"}, {"id": "2"}])
+
+    async with AlegraClient(settings) as client:
+        records = await client.fetch_all_pages("item-categories")
     assert len(records) == 2
 
 
