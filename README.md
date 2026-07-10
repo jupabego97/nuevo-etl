@@ -64,7 +64,9 @@ alegra-etl serve-webhooks
 | Servicio | Config | Comando |
 |----------|--------|---------|
 | Webhooks | `railway.json` | `PYTHONPATH=/app/src uvicorn alegra_etl.web.app:create_app --factory --host 0.0.0.0 --port $PORT` |
-| Cron ETL | `railway-cron.json` | `PYTHONPATH=/app/src alegra-etl daily-sync` |
+| Cron diario | `railway-cron.json` | `PYTHONPATH=/app/src alegra-etl daily-sync` |
+| Backfill histórico (temporal) | `railway-backfill.json` | `PYTHONPATH=/app/src alegra-etl backfill-step` |
+| Refresh maestros (semanal) | `railway-weekly.json` | `PYTHONPATH=/app/src alegra-etl weekly-refresh` |
 
 4. En **ambos servicios**, referencia las variables del Postgres nuevo (`DATABASE_URL`, etc.) — no uses la BD del cron legacy.
 
@@ -85,7 +87,10 @@ Ejecuta en un shell de Railway o localmente contra el Postgres nuevo:
 ```bash
 alegra-etl bootstrap
 alegra-etl migrate
-alegra-etl backfill
+# Opción recomendada: backfill por lotes (cron cada 10-15 min con railway-backfill.json)
+alegra-etl backfill-step
+# Alternativa monolítica (solo local / volúmenes pequeños):
+# alegra-etl backfill
 ```
 
 ### 4. Cron

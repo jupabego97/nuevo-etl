@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -62,9 +63,15 @@ class SyncCheckpoint(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     company_id: Mapped[int] = mapped_column(Integer, nullable=False)
     resource_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
     last_successful_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     watermark_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    backfill_start_date: Mapped[date | None] = mapped_column(Date)
+    backfill_end_date: Mapped[date | None] = mapped_column(Date)
+    cursor_date: Mapped[date | None] = mapped_column(Date)
+    cursor_offset: Mapped[int] = mapped_column(Integer, default=0)
+    backfill_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 

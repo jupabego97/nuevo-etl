@@ -1,4 +1,4 @@
-"""Construcción de marts analíticos."""
+"""Construcción de marts analíticos retail."""
 
 from __future__ import annotations
 
@@ -38,14 +38,21 @@ CREATE TABLE IF NOT EXISTS gold_replenishment (
     warehouse_alegra_id VARCHAR(50) DEFAULT 'default',
     available_quantity NUMERIC(20,6),
     sales_7d NUMERIC(20,6),
+    sales_15d NUMERIC(20,6),
     sales_30d NUMERIC(20,6),
+    sales_60d NUMERIC(20,6),
     sales_90d NUMERIC(20,6),
+    credit_returns_90d NUMERIC(20,6),
+    net_demand_90d NUMERIC(20,6),
     avg_daily_demand NUMERIC(20,6),
+    demand_trend_pct NUMERIC(10,4),
     lead_time_days INTEGER,
     safety_stock NUMERIC(20,6),
     reorder_point NUMERIC(20,6),
     suggested_order_qty NUMERIC(20,6),
     last_purchase_price NUMERIC(20,6),
+    last_purchase_date DATE,
+    top_supplier VARCHAR(500),
     avg_sale_price NUMERIC(20,6),
     margin_pct NUMERIC(10,4),
     markup_pct NUMERIC(10,4),
@@ -96,6 +103,7 @@ class MartBuilder:
                 WHERE l.company_id = :company_id
                   AND h.invoice_date >= CURRENT_DATE - INTERVAL '30 days'
                   AND COALESCE(h.status, '') <> 'void'
+                  AND h.deleted_at IS NULL
             ),
             purchases AS (
                 SELECT
@@ -110,6 +118,7 @@ class MartBuilder:
                   AND pl.line_kind = 'item'
                   AND pl.item_alegra_id IS NOT NULL
                   AND pb.bill_date >= CURRENT_DATE - INTERVAL '90 days'
+                  AND pb.deleted_at IS NULL
                 GROUP BY pl.item_alegra_id
             )
             SELECT
@@ -140,10 +149,11 @@ class MartBuilder:
             """
             INSERT INTO gold_replenishment (
                 item_alegra_id, item_name, familia, warehouse_alegra_id,
-                available_quantity, sales_7d, sales_30d, sales_90d,
-                avg_daily_demand, lead_time_days, safety_stock, reorder_point,
-                suggested_order_qty, last_purchase_price, avg_sale_price,
-                margin_pct, markup_pct
+                available_quantity, sales_7d, sales_15d, sales_30d, sales_60d, sales_90d,
+                credit_returns_90d, net_demand_90d, avg_daily_demand, demand_trend_pct,
+                lead_time_days, safety_stock, reorder_point, suggested_order_qty,
+                last_purchase_price, last_purchase_date, top_supplier,
+                avg_sale_price, margin_pct, markup_pct
             )
             WITH item_base AS (
                 SELECT
@@ -158,15 +168,19 @@ class MartBuilder:
                   ON inv.company_id = i.company_id
                  AND inv.item_alegra_id = i.alegra_id
                 WHERE i.company_id = :company_id
-                  AND COALESCE(i.deleted_at, TIMESTAMPTZ 'infinity') > NOW()
+                  AND i.deleted_at IS NULL
             ),
             sales_stats AS (
                 SELECT
                     l.item_alegra_id,
                     SUM(CASE WHEN h.invoice_date >= CURRENT_DATE - INTERVAL '7 days'
                              THEN l.quantity ELSE 0 END) AS sales_7d,
+                    SUM(CASE WHEN h.invoice_date >= CURRENT_DATE - INTERVAL '15 days'
+                             THEN l.quantity ELSE 0 END) AS sales_15d,
                     SUM(CASE WHEN h.invoice_date >= CURRENT_DATE - INTERVAL '30 days'
                              THEN l.quantity ELSE 0 END) AS sales_30d,
+                    SUM(CASE WHEN h.invoice_date >= CURRENT_DATE - INTERVAL '60 days'
+                             THEN l.quantity ELSE 0 END) AS sales_60d,
                     SUM(CASE WHEN h.invoice_date >= CURRENT_DATE - INTERVAL '90 days'
                              THEN l.quantity ELSE 0 END) AS sales_90d,
                     AVG(l.unit_price) FILTER (
@@ -178,18 +192,25 @@ class MartBuilder:
                  AND h.alegra_id = l.invoice_alegra_id
                 WHERE l.company_id = :company_id
                   AND COALESCE(h.status, '') <> 'void'
+                  AND h.deleted_at IS NULL
                 GROUP BY l.item_alegra_id
             ),
             credit_stats AS (
-                SELECT item_alegra_id, SUM(quantity) AS returned_qty
-                FROM fact_credit_note_line
-                WHERE company_id = :company_id
-                GROUP BY item_alegra_id
+                SELECT
+                    cn.item_alegra_id,
+                    SUM(cn.quantity) AS returned_qty
+                FROM fact_credit_note_line cn
+                JOIN fact_credit_note h
+                  ON h.company_id = cn.company_id
+                 AND h.alegra_id = cn.credit_note_alegra_id
+                WHERE cn.company_id = :company_id
+                  AND h.note_date >= CURRENT_DATE - INTERVAL '90 days'
+                GROUP BY cn.item_alegra_id
             ),
-            last_purchase AS (
-                SELECT DISTINCT ON (pl.item_alegra_id)
+            purchase_stats AS (
+                SELECT
                     pl.item_alegra_id,
-                    pl.unit_price AS last_purchase_price
+                    MODE() WITHIN GROUP (ORDER BY pb.provider_name) AS top_supplier
                 FROM fact_purchase_bill_line pl
                 JOIN fact_purchase_bill pb
                   ON pb.company_id = pl.company_id
@@ -197,6 +218,22 @@ class MartBuilder:
                 WHERE pl.company_id = :company_id
                   AND pl.line_kind = 'item'
                   AND pl.item_alegra_id IS NOT NULL
+                  AND pb.deleted_at IS NULL
+                GROUP BY pl.item_alegra_id
+            ),
+            last_purchase AS (
+                SELECT DISTINCT ON (pl.item_alegra_id)
+                    pl.item_alegra_id,
+                    pl.unit_price AS last_purchase_price,
+                    pb.bill_date AS last_purchase_date
+                FROM fact_purchase_bill_line pl
+                JOIN fact_purchase_bill pb
+                  ON pb.company_id = pl.company_id
+                 AND pb.alegra_id = pl.bill_alegra_id
+                WHERE pl.company_id = :company_id
+                  AND pl.line_kind = 'item'
+                  AND pl.item_alegra_id IS NOT NULL
+                  AND pb.deleted_at IS NULL
                 ORDER BY pl.item_alegra_id, pb.bill_date DESC
             ),
             policy AS (
@@ -211,32 +248,48 @@ class MartBuilder:
                 b.warehouse_alegra_id,
                 b.available_quantity,
                 COALESCE(s.sales_7d, 0),
+                COALESCE(s.sales_15d, 0),
                 COALESCE(s.sales_30d, 0),
+                COALESCE(s.sales_60d, 0),
                 COALESCE(s.sales_90d, 0),
-                COALESCE(s.sales_30d, 0) / 30.0 AS avg_daily_demand,
-                COALESCE(p.lead_time_days, 7) AS lead_time_days,
-                (COALESCE(s.sales_30d, 0) / 30.0) * COALESCE(p.safety_stock_days, 3) AS safety_stock,
-                (COALESCE(s.sales_30d, 0) / 30.0) * (COALESCE(p.lead_time_days, 7) + COALESCE(p.safety_stock_days, 3)) AS reorder_point,
+                COALESCE(c.returned_qty, 0),
+                COALESCE(s.sales_90d, 0) - COALESCE(c.returned_qty, 0),
+                GREATEST(COALESCE(s.sales_30d, 0) - COALESCE(c.returned_qty, 0) * 0.33, 0) / 30.0,
+                CASE
+                    WHEN COALESCE(s.sales_30d, 0) > 0
+                    THEN ((COALESCE(s.sales_7d, 0) / 7.0) - (COALESCE(s.sales_30d, 0) / 30.0))
+                         / (COALESCE(s.sales_30d, 0) / 30.0) * 100
+                    ELSE NULL
+                END,
+                COALESCE(p.lead_time_days, 7),
+                (GREATEST(COALESCE(s.sales_30d, 0) - COALESCE(c.returned_qty, 0) * 0.33, 0) / 30.0)
+                    * COALESCE(p.safety_stock_days, 3),
+                (GREATEST(COALESCE(s.sales_30d, 0) - COALESCE(c.returned_qty, 0) * 0.33, 0) / 30.0)
+                    * (COALESCE(p.lead_time_days, 7) + COALESCE(p.safety_stock_days, 3)),
                 GREATEST(
-                    (COALESCE(s.sales_30d, 0) / 30.0) * COALESCE(p.review_period_days, 30)
+                    (GREATEST(COALESCE(s.sales_30d, 0) - COALESCE(c.returned_qty, 0) * 0.33, 0) / 30.0)
+                        * COALESCE(p.review_period_days, 30)
                     - b.available_quantity,
                     0
-                ) AS suggested_order_qty,
+                ),
                 lp.last_purchase_price,
+                lp.last_purchase_date,
+                ps.top_supplier,
                 s.avg_sale_price,
                 CASE
                     WHEN s.avg_sale_price > 0 AND lp.last_purchase_price IS NOT NULL
                     THEN ((s.avg_sale_price - lp.last_purchase_price) / s.avg_sale_price) * 100
                     ELSE NULL
-                END AS margin_pct,
+                END,
                 CASE
                     WHEN lp.last_purchase_price > 0 AND s.avg_sale_price IS NOT NULL
                     THEN ((s.avg_sale_price - lp.last_purchase_price) / lp.last_purchase_price) * 100
                     ELSE NULL
-                END AS markup_pct
+                END
             FROM item_base b
             LEFT JOIN sales_stats s ON s.item_alegra_id = b.item_alegra_id
             LEFT JOIN credit_stats c ON c.item_alegra_id = b.item_alegra_id
+            LEFT JOIN purchase_stats ps ON ps.item_alegra_id = b.item_alegra_id
             LEFT JOIN last_purchase lp ON lp.item_alegra_id = b.item_alegra_id
             LEFT JOIN policy p
               ON p.item_alegra_id = b.item_alegra_id

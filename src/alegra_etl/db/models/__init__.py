@@ -1,6 +1,7 @@
 """Exportación de modelos SQLAlchemy."""
 
 from alegra_etl.db.models.base import Base
+from alegra_etl.db.models.canonical import SourceDocument
 from alegra_etl.db.models.control import EtlRun, EtlStageRun, QualityCheckResult, SyncCheckpoint
 from alegra_etl.db.models.dimensions import (
     DimCompany,
@@ -61,6 +62,7 @@ __all__ = [
     "QualityCheckResult",
     "RawDocument",
     "ReplenishmentPolicy",
+    "SourceDocument",
     "SyncCheckpoint",
     "WebhookEvent",
 ]

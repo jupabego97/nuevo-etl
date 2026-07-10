@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 from alegra_etl.alegra.resources import resource_by_name, resource_for_webhook_event
 from alegra_etl.config import Settings
 from alegra_etl.db.models import DeadLetterEvent, WebhookEvent
-from alegra_etl.pipeline.runner import PipelineRunner
+from alegra_etl.pipeline.source_loader import soft_delete_source_document
+from alegra_etl.pipeline.typed_loader import soft_delete_typed_document
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,8 @@ class WebhookProcessor:
     def __init__(self, settings: Settings, session: Session):
         self.settings = settings
         self.session = session
+        from alegra_etl.pipeline.runner import PipelineRunner
+
         self.runner = PipelineRunner(settings, session)
 
     def enqueue_event(self, event_type: str, payload: dict[str, Any]) -> WebhookEvent:
@@ -121,7 +124,27 @@ class WebhookProcessor:
 
     async def _process_event(self, event: WebhookEvent) -> None:
         if event.event_type.endswith("-delete"):
-            logger.info("Evento delete registrado para %s (%s)", event.event_type, event.resource_id)
+            lookup_key = event.event_type.replace("delete-", "edit-")
+            resource_name = EVENT_TO_RESOURCE.get(lookup_key)
+            if not resource_name:
+                resource = resource_for_webhook_event(lookup_key)
+                resource_name = resource.name if resource else None
+            if resource_name and event.resource_id:
+                soft_delete_source_document(
+                    self.session,
+                    company_id=self.settings.company_id,
+                    resource_name=resource_name,
+                    alegra_id=event.resource_id,
+                )
+                resource_def = resource_by_name(resource_name)
+                if resource_def:
+                    soft_delete_typed_document(
+                        self.session,
+                        resource_def,
+                        event.resource_id,
+                        self.settings.company_id,
+                    )
+            logger.info("Soft-delete aplicado para %s (%s)", event.event_type, event.resource_id)
             return
 
         resource_name = EVENT_TO_RESOURCE.get(event.event_type)

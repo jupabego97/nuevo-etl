@@ -41,6 +41,15 @@ class Settings(BaseSettings):
         ge=5,
         le=120,
     )
+    backfill_start_date: str = Field(default="2022-01-01", alias="BACKFILL_START_DATE")
+    backfill_days_per_step: int = Field(default=1, alias="BACKFILL_DAYS_PER_STEP", ge=1, le=30)
+    backfill_pages_per_step: int = Field(default=5, alias="BACKFILL_PAGES_PER_STEP", ge=1, le=50)
+    backfill_max_pages_per_day: int = Field(
+        default=200,
+        alias="BACKFILL_MAX_PAGES_PER_DAY",
+        ge=1,
+        le=1000,
+    )
 
     webhook_secret: SecretStr = Field(..., alias="WEBHOOK_SECRET")
     webhook_host: str = Field(default="0.0.0.0", alias="WEBHOOK_HOST")

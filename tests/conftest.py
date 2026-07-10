@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+from alegra_etl.config import get_settings
+
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/alegra_etl_test")
 os.environ.setdefault("ALEGRA_EMAIL", "test@example.com")
 os.environ.setdefault("ALEGRA_TOKEN", "test-token")
@@ -14,8 +16,19 @@ os.environ.setdefault("DB_SCHEMA", "alegra_etl")
 
 
 @pytest.fixture
-def sample_invoice() -> dict:
-    return {
+def settings(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("DATABASE_URL", os.environ["DATABASE_URL"])
+    monkeypatch.setenv("ALEGRA_EMAIL", os.environ["ALEGRA_EMAIL"])
+    monkeypatch.setenv("ALEGRA_TOKEN", os.environ["ALEGRA_TOKEN"])
+    monkeypatch.setenv("WEBHOOK_SECRET", os.environ["WEBHOOK_SECRET"])
+    cfg = get_settings()
+    yield cfg
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def sample_invoice() -> dict:    return {
         "id": "101",
         "date": "2025-06-01",
         "dueDate": "2025-06-15",

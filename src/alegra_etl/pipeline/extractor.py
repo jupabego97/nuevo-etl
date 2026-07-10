@@ -1,4 +1,4 @@
-"""Extracción paginada y persistencia raw."""
+"""Extracción paginada concurrente con persistencia canónica."""
 
 from __future__ import annotations
 
@@ -10,37 +10,26 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from alegra_etl.alegra.client import AlegraClient, hash_payload, hash_request
-from alegra_etl.alegra.parsers import (
-    parse_contacts,
-    parse_credit_notes,
-    parse_items,
-    parse_purchase_bills,
-    parse_sales_invoices,
-    parse_simple_dimension,
-)
 from alegra_etl.alegra.resources import ResourceDefinition, SyncStrategy
 from alegra_etl.config import Settings
-from alegra_etl.db.models import (
-    DimContact,
-    DimItem,
-    DimItemInventory,
-    DimItemPrice,
-    DimSeller,
-    DimTax,
-    DimWarehouse,
-    FactCreditNote,
-    FactCreditNoteLine,
-    FactIncomePayment,
-    FactIncomePaymentApplication,
-    FactPurchaseBill,
-    FactPurchaseBillLine,
-    FactSalesInvoice,
-    FactSalesInvoiceLine,
-    RawDocument,
-)
-from alegra_etl.pipeline.loader import upsert_rows
+from alegra_etl.db.models import RawDocument
+from alegra_etl.pipeline.concurrent_fetch import fetch_date_page_batch, fetch_page_batch
+from alegra_etl.pipeline.source_loader import upsert_source_documents
+from alegra_etl.pipeline.typed_loader import transform_and_load
 
 logger = logging.getLogger(__name__)
+
+
+def _memory_mb() -> float:
+    try:
+        import resource as resource_module  # Unix only
+
+        usage = resource_module.getrusage(resource_module.RUSAGE_SELF).ru_maxrss
+        if usage > 10_000_000:
+            return usage / (1024 * 1024)
+        return usage / 1024
+    except Exception:
+        return 0.0
 
 
 class ResourceExtractor:
@@ -57,93 +46,202 @@ class ResourceExtractor:
         *,
         start_date: date | None = None,
         end_date: date | None = None,
+        start_offset: int = 0,
+        max_pages: int | None = None,
     ) -> dict[str, int]:
+        if resource.strategy == SyncStrategy.FULL and not resource.supports_pagination:
+            records = await self._fetch_single(resource)
+            return await self._persist_records(resource, records, request_params=resource.extra_params, page_start=0)
+
         if resource.strategy == SyncStrategy.FULL:
-            records = await self.client.fetch_all_pages(
-                resource.endpoint,
-                extra_params=resource.extra_params,
-                order_field=resource.order_field,
-                order_direction=resource.order_direction,
+            return await self._extract_full_paginated(
+                resource,
+                start_offset=start_offset,
+                max_pages=max_pages or self.settings.backfill_pages_per_step,
             )
-            await self._store_raw(resource, 0, resource.extra_params, records)
-            loaded = self._transform_and_load(resource.name, records)
-            return {"extracted": len(records), "loaded": loaded}
 
         if resource.strategy == SyncStrategy.DATE_WINDOW:
             if not start_date or not end_date:
                 end_date = date.today()
                 start_date = end_date - timedelta(days=self.settings.sync_overlap_days)
-            total_extracted = 0
-            total_loaded = 0
-            total_days = (end_date - start_date).days + 1
-            current = start_date
-            day_index = 0
-            while current <= end_date:
-                day_index += 1
-                print(
-                    f"[extract] {resource.name} día {current.isoformat()} "
-                    f"({day_index}/{total_days})...",
-                    flush=True,
-                )
-                day_records = await self.client.get_by_date(
-                    resource.endpoint,
-                    current.isoformat(),
-                    extra_params=resource.extra_params,
-                )
-                print(
-                    f"[extract] {resource.name} {current.isoformat()}: "
-                    f"{len(day_records)} registros",
-                    flush=True,
-                )
-                # Raw liviano si el día es muy grande (evita OOM en Railway)
-                raw_payload = day_records
-                if len(day_records) > 100:
-                    raw_payload = {
-                        "count": len(day_records),
-                        "ids": [str(r.get("id")) for r in day_records if r.get("id") is not None][:500],
-                        "truncated": True,
-                    }
-                params = {"date": current.isoformat(), **resource.extra_params}
-                await self._store_raw(resource, 0, params, raw_payload if isinstance(raw_payload, list) else [raw_payload])
-                loaded = self._transform_and_load(resource.name, day_records)
-                self.session.commit()
-                total_extracted += len(day_records)
-                total_loaded += loaded
-                current += timedelta(days=1)
-            return {"extracted": total_extracted, "loaded": total_loaded}
+            return await self._extract_date_window(
+                resource,
+                start_date=start_date,
+                end_date=end_date,
+                start_offset=start_offset,
+                max_pages=max_pages,
+            )
 
-        records = await self.client.fetch_all_pages(
-            resource.endpoint,
-            extra_params=resource.extra_params,
-            order_field=resource.order_field,
-            order_direction=resource.order_direction,
+        return await self._extract_full_paginated(
+            resource,
+            start_offset=start_offset,
+            max_pages=max_pages or self.settings.backfill_pages_per_step,
         )
-        await self._store_raw(resource, 0, resource.extra_params, records)
-        loaded = self._transform_and_load(resource.name, records)
-        return {"extracted": len(records), "loaded": loaded}
 
     async def extract_resource_by_id(self, resource: ResourceDefinition, resource_id: str) -> dict[str, int]:
         if not resource.detail_endpoint_template:
             raise ValueError(f"Recurso {resource.name} no soporta extracción por ID")
         record = await self.client.get_by_id(resource.detail_endpoint_template, resource_id)
-        await self._store_raw(resource, 0, {"id": resource_id}, [record])
-        loaded = self._transform_and_load(resource.name, [record])
-        return {"extracted": 1, "loaded": loaded}
+        return await self._persist_records(resource, [record], request_params={"id": resource_id}, page_start=0)
 
-    async def _store_raw(
+    async def _fetch_single(self, resource: ResourceDefinition) -> list[dict[str, Any]]:
+        page, _ = await self.client.get_page(resource.endpoint, extra_params=resource.extra_params)
+        return page
+
+    async def _extract_full_paginated(
         self,
         resource: ResourceDefinition,
-        page_start: int,
-        params: dict[str, Any],
+        *,
+        start_offset: int,
+        max_pages: int | None,
+    ) -> dict[str, int]:
+        metrics = {"extracted": 0, "source_upserted": 0, "typed_upserted": 0, "pages": 0}
+        offset = start_offset
+        pages_per_batch = max_pages or self.settings.backfill_pages_per_step
+
+        while True:
+            async def on_page(page_offset: int, page: list[dict[str, Any]], _meta: dict[str, Any] | None) -> None:
+                batch = await self._persist_records(
+                    resource,
+                    page,
+                    request_params={**resource.extra_params, "start": page_offset},
+                    page_start=page_offset,
+                )
+                for key in ("extracted", "source_upserted", "typed_upserted"):
+                    metrics[key] += batch.get(key, 0)
+                metrics["pages"] += 1
+                self.session.commit()
+                print(
+                    f"[extract] {resource.name} offset={page_offset} "
+                    f"records={len(page)} mem={_memory_mb():.0f}MB",
+                    flush=True,
+                )
+
+            result = await fetch_page_batch(
+                self.client,
+                resource.endpoint,
+                extra_params=resource.extra_params,
+                order_field=resource.order_field,
+                order_direction=resource.order_direction,
+                start_offset=offset,
+                max_pages=pages_per_batch,
+                on_page=on_page,
+            )
+            offset = result.next_offset
+            if result.completed or max_pages is not None:
+                metrics["completed"] = int(result.completed)
+                metrics["next_offset"] = offset if not result.completed else 0
+                return metrics
+
+    async def _extract_date_window(
+        self,
+        resource: ResourceDefinition,
+        *,
+        start_date: date,
+        end_date: date,
+        start_offset: int,
+        max_pages: int | None,
+    ) -> dict[str, int]:
+        metrics = {
+            "extracted": 0,
+            "source_upserted": 0,
+            "typed_upserted": 0,
+            "pages": 0,
+            "completed": 1,
+            "next_offset": 0,
+        }
+        pages_limit = max_pages or self.settings.backfill_max_pages_per_day
+        current = start_date
+        total_days = (end_date - start_date).days + 1
+        day_index = 0
+        offset = start_offset
+
+        while current <= end_date:
+            day_index += 1
+            day_completed = False
+            pages_this_day = 0
+            day = current
+
+            def _make_on_page(capture_day: date):
+                async def _handler(page_offset: int, page: list[dict[str, Any]], _meta: dict[str, Any] | None) -> None:
+                    nonlocal pages_this_day
+                    batch = await self._persist_records(
+                        resource,
+                        page,
+                        request_params={
+                            "date": capture_day.isoformat(),
+                            **resource.extra_params,
+                            "start": page_offset,
+                        },
+                        page_start=page_offset,
+                    )
+                    for key in ("extracted", "source_upserted", "typed_upserted"):
+                        metrics[key] += batch.get(key, 0)
+                    metrics["pages"] += 1
+                    pages_this_day += 1
+                    self.session.commit()
+                    print(
+                        f"[extract] {resource.name} {capture_day.isoformat()} offset={page_offset} "
+                        f"records={len(page)} mem={_memory_mb():.0f}MB",
+                        flush=True,
+                    )
+
+                return _handler
+
+            on_page = _make_on_page(day)
+
+            while pages_this_day < pages_limit:
+                batch_result = await fetch_date_page_batch(
+                    self.client,
+                    resource.endpoint,
+                    day.isoformat(),
+                    extra_params=resource.extra_params,
+                    start_offset=offset,
+                    max_pages=min(self.settings.backfill_pages_per_step, pages_limit - pages_this_day),
+                    on_page=on_page,
+                )
+                offset = batch_result.next_offset
+                if batch_result.completed or batch_result.pages_fetched == 0:
+                    day_completed = True
+                    offset = 0
+                    break
+                if max_pages is not None:
+                    break
+
+            if not day_completed and max_pages is not None:
+                metrics["completed"] = 0
+                metrics["next_offset"] = offset
+                metrics["cursor_date"] = current.isoformat()
+                return metrics
+
+            print(
+                f"[extract] {resource.name} día {current.isoformat()} "
+                f"({day_index}/{total_days}) OK",
+                flush=True,
+            )
+            current += timedelta(days=1)
+
+        metrics["cursor_date"] = end_date.isoformat()
+        return metrics
+
+    async def _persist_records(
+        self,
+        resource: ResourceDefinition,
         records: list[dict[str, Any]],
-    ) -> None:
+        *,
+        request_params: dict[str, Any],
+        page_start: int,
+    ) -> dict[str, int]:
+        if not records:
+            return {"extracted": 0, "source_upserted": 0, "typed_upserted": 0}
+
         payload = {"records": records, "count": len(records)}
         raw = RawDocument(
             run_id=self.run_id,
             resource_name=resource.name,
             endpoint=resource.endpoint,
-            request_params=params,
-            request_hash=hash_request(params),
+            request_params=request_params,
+            request_hash=hash_request(request_params),
             page_start=page_start,
             http_status=200,
             payload=payload,
@@ -152,94 +250,18 @@ class ResourceExtractor:
         )
         self.session.merge(raw)
 
-    def _transform_and_load(self, resource_name: str, records: list[dict[str, Any]]) -> int:
-        if resource_name == "items":
-            items, prices, inventories = parse_items(records, self.company_id)
-            loaded = 0
-            if items:
-                loaded = upsert_rows(
-                    self.session,
-                    DimItem.__table__,
-                    items,
-                    ["company_id", "alegra_id"],
-                    update_columns=[c for c in items[0].keys()],
-                )
-            upsert_rows(self.session, DimItemPrice.__table__, prices, ["company_id", "item_alegra_id", "price_list_id"])
-            upsert_rows(
-                self.session,
-                DimItemInventory.__table__,
-                inventories,
-                ["company_id", "item_alegra_id", "warehouse_alegra_id"],
-            )
-            return loaded
+        source_upserted = upsert_source_documents(
+            self.session,
+            company_id=self.company_id,
+            resource=resource,
+            records=records,
+            run_id=self.run_id,
+        )
+        typed_upserted = transform_and_load(self.session, resource, records, self.company_id)
 
-        if resource_name == "contacts":
-            rows = parse_contacts(records, self.company_id)
-            return upsert_rows(self.session, DimContact.__table__, rows, ["company_id", "alegra_id"])
-
-        if resource_name == "sellers":
-            rows = parse_simple_dimension(records, self.company_id)
-            return upsert_rows(self.session, DimSeller.__table__, rows, ["company_id", "alegra_id"])
-
-        if resource_name == "warehouses":
-            rows = parse_simple_dimension(records, self.company_id)
-            return upsert_rows(self.session, DimWarehouse.__table__, rows, ["company_id", "alegra_id"])
-
-        if resource_name == "taxes":
-            rows = []
-            for record in records:
-                alegra_id = str(record.get("id"))
-                rows.append(
-                    {
-                        "company_id": self.company_id,
-                        "alegra_id": alegra_id,
-                        "name": record.get("name") or alegra_id,
-                        "percentage": record.get("percentage"),
-                        "tax_type": record.get("type"),
-                        "status": record.get("status"),
-                    }
-                )
-            return upsert_rows(self.session, DimTax.__table__, rows, ["company_id", "alegra_id"])
-
-        if resource_name == "invoices":
-            headers, lines, payments, applications = parse_sales_invoices(records, self.company_id)
-            loaded = upsert_rows(self.session, FactSalesInvoice.__table__, headers, ["company_id", "alegra_id"])
-            upsert_rows(
-                self.session,
-                FactSalesInvoiceLine.__table__,
-                lines,
-                ["company_id", "invoice_alegra_id", "line_number"],
-            )
-            upsert_rows(self.session, FactIncomePayment.__table__, payments, ["company_id", "alegra_id"])
-            upsert_rows(
-                self.session,
-                FactIncomePaymentApplication.__table__,
-                applications,
-                ["company_id", "payment_alegra_id", "invoice_alegra_id"],
-            )
-            return loaded
-
-        if resource_name == "bills":
-            headers, lines = parse_purchase_bills(records, self.company_id)
-            loaded = upsert_rows(self.session, FactPurchaseBill.__table__, headers, ["company_id", "alegra_id"])
-            upsert_rows(
-                self.session,
-                FactPurchaseBillLine.__table__,
-                lines,
-                ["company_id", "bill_alegra_id", "line_number"],
-            )
-            return loaded
-
-        if resource_name == "credit-notes":
-            headers, lines = parse_credit_notes(records, self.company_id)
-            loaded = upsert_rows(self.session, FactCreditNote.__table__, headers, ["company_id", "alegra_id"])
-            upsert_rows(
-                self.session,
-                FactCreditNoteLine.__table__,
-                lines,
-                ["company_id", "credit_note_alegra_id", "line_number"],
-            )
-            return loaded
-
-        logger.info("Recurso %s extraído en raw (%s registros) sin transformador dedicado", resource_name, len(records))
-        return len(records)
+        return {
+            "extracted": len(records),
+            "source_upserted": source_upserted,
+            "typed_upserted": typed_upserted,
+            "loaded": typed_upserted,
+        }

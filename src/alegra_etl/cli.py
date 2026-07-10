@@ -16,7 +16,6 @@ from alegra_etl.marts.builder import MartBuilder
 from alegra_etl.pipeline.reconciler import Reconciler
 from alegra_etl.pipeline.runner import PipelineRunner
 from alegra_etl.pipeline.webhook_processor import WebhookProcessor
-from alegra_etl.web.app import create_app
 
 app = typer.Typer(
     help="ETL productivo Alegra → PostgreSQL",
@@ -65,6 +64,39 @@ def migrate() -> None:
     _setup()
     _run_migrations()
     typer.echo("Migraciones aplicadas")
+
+
+@app.command("backfill-step")
+def backfill_step() -> None:
+    """Procesa un lote reanudable del histórico (para cron temporal en Railway)."""
+    _setup()
+    settings = get_settings()
+    _run_migrations()
+
+    async def _run() -> None:
+        with session_scope(settings) as session:
+            runner = PipelineRunner(settings, session)
+            result = await runner.run_backfill_step()
+            typer.echo(str(result))
+
+    asyncio.run(_run())
+    sys.exit(0)
+
+
+@app.command("weekly-refresh")
+def weekly_refresh() -> None:
+    """Refresca maestros completos (items, contactos, etc.)."""
+    _setup()
+    settings = get_settings()
+    _run_migrations()
+
+    async def _run() -> None:
+        with session_scope(settings) as session:
+            runner = PipelineRunner(settings, session)
+            run_id = await runner.run_weekly_refresh()
+            typer.echo(f"Weekly refresh completado. run_id={run_id}")
+
+    asyncio.run(_run())
 
 
 @app.command("backfill")
