@@ -11,8 +11,6 @@ import os
 import sys
 
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
 
@@ -31,11 +29,13 @@ def upgrade() -> None:
     op.execute(f'CREATE SCHEMA IF NOT EXISTS "{settings.db_schema}"')
     configure_schema(settings.db_schema)
     bind = op.get_bind()
+    # Crea todas las tablas del modelo bajo el esquema aislado.
     Base.metadata.create_all(bind=bind, checkfirst=True)
 
 
 def downgrade() -> None:
     settings = get_settings()
+    configure_schema(settings.db_schema)
     bind = op.get_bind()
     Base.metadata.drop_all(bind=bind, checkfirst=True)
     op.execute(f'DROP SCHEMA IF EXISTS "{settings.db_schema}" CASCADE')

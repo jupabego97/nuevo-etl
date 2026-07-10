@@ -10,7 +10,7 @@ from sqlalchemy import BigInteger, DateTime, Integer, String, Text, UniqueConstr
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from alegra_etl.db.models.base import Base, TimestampMixin
+from alegra_etl.db.models.base import JSONB_EMPTY, Base, TimestampMixin
 
 
 class RawDocument(Base, TimestampMixin):
@@ -29,7 +29,7 @@ class RawDocument(Base, TimestampMixin):
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     resource_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     endpoint: Mapped[str] = mapped_column(String(255), nullable=False)
-    request_params: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    request_params: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     page_start: Mapped[int] = mapped_column(Integer, default=0)
     http_status: Mapped[int] = mapped_column(Integer, nullable=False)

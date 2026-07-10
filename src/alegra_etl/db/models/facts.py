@@ -19,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from alegra_etl.db.models.base import Base, TimestampMixin
+from alegra_etl.db.models.base import JSONB_EMPTY, Base, TimestampMixin
 
 
 class FactSalesInvoice(Base, TimestampMixin):
@@ -50,7 +50,7 @@ class FactSalesInvoice(Base, TimestampMixin):
     total_paid: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     balance: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     payment_form: Mapped[str | None] = mapped_column(String(50))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
     payload_hash: Mapped[str | None] = mapped_column(String(64))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -78,7 +78,7 @@ class FactSalesInvoiceLine(Base, TimestampMixin):
     tax_total: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     line_subtotal: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     line_total: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class FactIncomePayment(Base, TimestampMixin):
@@ -96,7 +96,7 @@ class FactIncomePayment(Base, TimestampMixin):
     bank_account_alegra_id: Mapped[str | None] = mapped_column(String(50))
     currency_code: Mapped[str | None] = mapped_column(String(10))
     exchange_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class FactIncomePaymentApplication(Base, TimestampMixin):
@@ -128,7 +128,7 @@ class FactCreditNote(Base, TimestampMixin):
     status: Mapped[str | None] = mapped_column(String(20))
     client_alegra_id: Mapped[str | None] = mapped_column(String(50))
     note_total: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class FactCreditNoteLine(Base, TimestampMixin):
@@ -173,7 +173,7 @@ class FactPurchaseBill(Base, TimestampMixin):
     bill_total: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     total_paid: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     balance: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
     payload_hash: Mapped[str | None] = mapped_column(String(64))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -201,7 +201,7 @@ class FactPurchaseBillLine(Base, TimestampMixin):
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     unit_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     line_total: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class FactPurchaseOrder(Base, TimestampMixin):
@@ -216,7 +216,7 @@ class FactPurchaseOrder(Base, TimestampMixin):
     status: Mapped[str | None] = mapped_column(String(20))
     provider_alegra_id: Mapped[str | None] = mapped_column(String(50))
     order_total: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class FactInventoryAdjustment(Base, TimestampMixin):
@@ -228,7 +228,7 @@ class FactInventoryAdjustment(Base, TimestampMixin):
     alegra_id: Mapped[str] = mapped_column(String(50), nullable=False)
     adjustment_date: Mapped[date] = mapped_column(Date, nullable=False)
     warehouse_alegra_id: Mapped[str | None] = mapped_column(String(50))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class FactWarehouseTransfer(Base, TimestampMixin):
@@ -241,7 +241,7 @@ class FactWarehouseTransfer(Base, TimestampMixin):
     transfer_date: Mapped[date | None] = mapped_column(Date)
     origin_warehouse_id: Mapped[str | None] = mapped_column(String(50))
     destination_warehouse_id: Mapped[str | None] = mapped_column(String(50))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class FactBankAccount(Base, TimestampMixin):
@@ -255,7 +255,7 @@ class FactBankAccount(Base, TimestampMixin):
     account_type: Mapped[str | None] = mapped_column(String(50))
     balance: Mapped[Decimal | None] = mapped_column(Numeric(20, 6))
     currency_code: Mapped[str | None] = mapped_column(String(10))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class ReplenishmentPolicy(Base, TimestampMixin):

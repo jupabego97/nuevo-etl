@@ -19,7 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from alegra_etl.db.models.base import Base, TimestampMixin
+from alegra_etl.db.models.base import JSONB_EMPTY, Base, TimestampMixin
 
 
 class EtlRun(Base, TimestampMixin):
@@ -31,7 +31,7 @@ class EtlRun(Base, TimestampMixin):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)
-    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
     stages: Mapped[list[EtlStageRun]] = relationship(back_populates="run")
 
@@ -50,7 +50,7 @@ class EtlStageRun(Base, TimestampMixin):
     records_loaded: Mapped[int] = mapped_column(Integer, default=0)
     records_failed: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[str | None] = mapped_column(Text)
-    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
     run: Mapped[EtlRun] = relationship(back_populates="stages")
 
@@ -65,7 +65,7 @@ class SyncCheckpoint(Base, TimestampMixin):
     last_successful_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     watermark_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class QualityCheckResult(Base, TimestampMixin):
@@ -75,4 +75,4 @@ class QualityCheckResult(Base, TimestampMixin):
     run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("etl_runs.id"))
     check_name: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
-    details: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)

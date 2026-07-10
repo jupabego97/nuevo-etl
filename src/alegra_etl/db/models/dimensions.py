@@ -20,7 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from alegra_etl.db.models.base import Base, TimestampMixin
+from alegra_etl.db.models.base import JSONB_EMPTY, Base, TimestampMixin
 
 
 class DimCompany(Base, TimestampMixin):
@@ -33,7 +33,7 @@ class DimCompany(Base, TimestampMixin):
     name: Mapped[str | None] = mapped_column(String(300))
     identification: Mapped[str | None] = mapped_column(String(100))
     currency_code: Mapped[str | None] = mapped_column(String(10))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
     first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -60,7 +60,7 @@ class DimItem(Base, TimestampMixin):
     family: Mapped[str | None] = mapped_column(String(200))
     brand: Mapped[str | None] = mapped_column(String(200))
     model: Mapped[str | None] = mapped_column(String(200))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
     payload_hash: Mapped[str | None] = mapped_column(String(64))
     first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -112,7 +112,7 @@ class DimContact(Base, TimestampMixin):
     contact_type: Mapped[str | None] = mapped_column(String(30))
     status: Mapped[str | None] = mapped_column(String(20))
     city: Mapped[str | None] = mapped_column(String(200))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
     payload_hash: Mapped[str | None] = mapped_column(String(64))
     first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -129,7 +129,7 @@ class DimSeller(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     identification: Mapped[str | None] = mapped_column(String(100))
     status: Mapped[str | None] = mapped_column(String(20))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class DimWarehouse(Base, TimestampMixin):
@@ -143,7 +143,7 @@ class DimWarehouse(Base, TimestampMixin):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str | None] = mapped_column(String(20))
     address: Mapped[str | None] = mapped_column(String(500))
-    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    raw_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 
 class DimCostCenter(Base, TimestampMixin):

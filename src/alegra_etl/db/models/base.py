@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import MetaData, func
+from sqlalchemy import MetaData, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import DateTime
 
@@ -17,13 +17,17 @@ NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 
+# DEFAULT {} es inválido en PostgreSQL para JSONB; hay que castear.
+JSONB_EMPTY = text("'{}'::jsonb")
+
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
 def configure_schema(schema_name: str) -> None:
-    """Asigna el esquema PostgreSQL a todas las tablas registradas."""
+    """Asigna el esquema PostgreSQL a metadata y a todas las tablas."""
+    Base.metadata.schema = schema_name
     for table in Base.metadata.tables.values():
         table.schema = schema_name
 
