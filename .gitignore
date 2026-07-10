@@ -42,3 +42,6 @@ htmlcov/
 *.csv
 *.sqlite
 *.db
+dist/
+dist_test/
+*.egg-info/

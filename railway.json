@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "uvicorn alegra_etl.web.app:create_app --factory --host 0.0.0.0 --port $PORT",
+    "startCommand": "PYTHONPATH=/app/src uvicorn alegra_etl.web.app:create_app --factory --host 0.0.0.0 --port $PORT",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }

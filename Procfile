@@ -1,1 +1,1 @@
-web: uvicorn alegra_etl.web.app:create_app --factory --host 0.0.0.0 --port $PORT
+web: PYTHONPATH=/app/src uvicorn alegra_etl.web.app:create_app --factory --host 0.0.0.0 --port $PORT

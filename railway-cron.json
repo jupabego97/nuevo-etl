@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "alegra-etl daily-sync",
+    "startCommand": "PYTHONPATH=/app/src alegra-etl daily-sync",
     "restartPolicyType": "NEVER"
   }
 }
