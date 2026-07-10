@@ -25,12 +25,22 @@ def _setup() -> None:
     setup_logging(settings.log_level, settings.log_json)
 
 
+def _run_migrations() -> None:
+    from alembic import command
+    from alembic.config import Config
+
+    settings = get_settings()
+    ensure_schema(settings)
+    alembic_cfg = Config("alembic.ini")
+    command.upgrade(alembic_cfg, "head")
+
+
 @app.command("bootstrap")
 def bootstrap() -> None:
     """Crea esquema, aplica migraciones y valida conexión."""
     _setup()
     settings = get_settings()
-    ensure_schema(settings)
+    _run_migrations()
     engine = create_db_engine(settings)
     with engine.connect() as conn:
         conn.execute(__import__("sqlalchemy").text("SELECT 1"))
@@ -41,11 +51,7 @@ def bootstrap() -> None:
 def migrate() -> None:
     """Ejecuta migraciones Alembic."""
     _setup()
-    from alembic import command
-    from alembic.config import Config
-
-    alembic_cfg = Config("alembic.ini")
-    command.upgrade(alembic_cfg, "head")
+    _run_migrations()
     typer.echo("Migraciones aplicadas")
 
 
@@ -54,6 +60,7 @@ def backfill() -> None:
     """Carga histórica completa de recursos habilitados."""
     _setup()
     settings = get_settings()
+    _run_migrations()
 
     async def _run() -> None:
         with session_scope(settings) as session:
@@ -69,6 +76,7 @@ def daily_sync() -> None:
     """Sincronización incremental diaria con ventana solapada."""
     _setup()
     settings = get_settings()
+    _run_migrations()
 
     async def _run() -> None:
         with session_scope(settings) as session:

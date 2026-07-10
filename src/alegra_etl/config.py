@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+import re
 from functools import lru_cache
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_SCHEMA_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class Settings(BaseSettings):
@@ -62,6 +65,23 @@ class Settings(BaseSettings):
         if value.startswith("postgresql://") and "+psycopg" not in value:
             return value.replace("postgresql://", "postgresql+psycopg://", 1)
         return value
+
+    @field_validator("db_schema")
+    @classmethod
+    def validate_db_schema(cls, value: str) -> str:
+        cleaned = value.strip().split()[0] if value.strip() else "alegra_etl"
+        # Evita pegar varias vars en un solo campo: alegra_etlCOMPANY_ID=1
+        if "=" in cleaned or "COMPANY_ID" in cleaned.upper():
+            raise ValueError(
+                "DB_SCHEMA inválido. Debe ser solo el nombre del esquema "
+                "(ej. alegra_etl). COMPANY_ID va en una variable aparte."
+            )
+        if not _SCHEMA_RE.match(cleaned):
+            raise ValueError(
+                "DB_SCHEMA debe ser un identificador SQL válido "
+                "(letras, números y guion bajo; ej. alegra_etl)."
+            )
+        return cleaned
 
     @model_validator(mode="after")
     def validate_alegra_credentials(self) -> Settings:
