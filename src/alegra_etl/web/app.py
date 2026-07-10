@@ -61,6 +61,3 @@ async def _process_event_async(event_id: str) -> None:
     with session_scope(settings) as session:
         processor = WebhookProcessor(settings, session)
         await processor.process_pending(limit=10)
-
-
-app = create_app()

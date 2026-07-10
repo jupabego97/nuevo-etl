@@ -130,7 +130,12 @@ def serve_webhooks() -> None:
     """Levanta el servicio FastAPI de webhooks."""
     _setup()
     settings = get_settings()
-    uvicorn.run(create_app(), host=settings.webhook_host, port=settings.webhook_port)
+    uvicorn.run(
+        "alegra_etl.web.app:create_app",
+        factory=True,
+        host=settings.webhook_host,
+        port=settings.webhook_port,
+    )
 
 
 def main() -> None:

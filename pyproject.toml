@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "alegra-etl"
 version = "1.0.0"
 description = "ETL productivo de Alegra hacia PostgreSQL con webhooks, reconciliación y marts retail"
-readme = "README.md"
+readme = { text = "ETL productivo de Alegra hacia PostgreSQL.", content-type = "text/markdown" }
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "jupabego97" }]
@@ -41,6 +41,9 @@ alegra-etl = "alegra_etl.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/alegra_etl"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

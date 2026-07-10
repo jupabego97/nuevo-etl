@@ -63,7 +63,7 @@ alegra-etl serve-webhooks
 
 | Servicio | Config | Comando |
 |----------|--------|---------|
-| Webhooks | `railway.json` | `uvicorn alegra_etl.web.app:app --host 0.0.0.0 --port $PORT` |
+| Webhooks | `railway.json` | `uvicorn alegra_etl.web.app:create_app --factory --host 0.0.0.0 --port $PORT` |
 | Cron ETL | `railway-cron.json` | `alegra-etl daily-sync` |
 
 4. En **ambos servicios**, referencia las variables del Postgres nuevo (`DATABASE_URL`, etc.) — no uses la BD del cron legacy.
