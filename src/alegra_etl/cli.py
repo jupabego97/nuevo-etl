@@ -86,18 +86,29 @@ def backfill() -> None:
 @app.command("daily-sync")
 def daily_sync() -> None:
     """Sincronización incremental diaria con ventana solapada."""
+    import signal
+
+    def _on_signal(signum: int, _frame: object) -> None:
+        print(f"[cli] Señal {signum} recibida (Railway puede estar deteniendo el job)", flush=True)
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
     _setup()
     settings = get_settings()
     print("[cli] Iniciando daily-sync...", flush=True)
     _run_migrations()
+    print("[cli] Preparando sincronización Alegra...", flush=True)
 
     async def _run() -> None:
+        print("[cli] Abriendo sesión PostgreSQL...", flush=True)
         with session_scope(settings) as session:
             runner = PipelineRunner(settings, session)
             run_id = await runner.run_daily_sync()
+            print("[cli] Construyendo marts...", flush=True)
             builder = MartBuilder(settings, session)
             marts = builder.build_all()
-            typer.echo(f"Daily sync completado. run_id={run_id} marts={marts}")
+            print(f"[cli] Daily sync completado. run_id={run_id} marts={marts}", flush=True)
 
     try:
         asyncio.run(_run())
@@ -105,6 +116,8 @@ def daily_sync() -> None:
         print("[cli] FALLO en daily-sync:", flush=True)
         traceback.print_exc()
         raise
+    print("[cli] Exit OK", flush=True)
+    sys.exit(0)
 
 
 @app.command("reconcile")

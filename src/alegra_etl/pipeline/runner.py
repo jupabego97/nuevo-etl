@@ -72,14 +72,26 @@ class PipelineRunner:
         return run.id
 
     async def run_daily_sync(self) -> uuid.UUID:
+        print("[sync] Creando registro etl_run...", flush=True)
         run = self._create_run("daily_sync")
+        self.session.commit()
+        print(f"[sync] run_id={run.id}", flush=True)
         metrics: dict[str, Any] = {"resources": {}}
         end_date = date.today()
         start_date = end_date - timedelta(days=self.settings.sync_overlap_days)
+        resources = get_enabled_resources(self.settings)
+        print(f"[sync] Recursos habilitados: {len(resources)}", flush=True)
 
+        print("[sync] Abriendo cliente Alegra...", flush=True)
         async with AlegraClient(self.settings) as client:
+            print("[sync] Cliente Alegra listo", flush=True)
             extractor = ResourceExtractor(self.settings, client, self.session, run.id)
-            for resource in get_enabled_resources(self.settings):
+            for index, resource in enumerate(resources, start=1):
+                print(
+                    f"[sync] ({index}/{len(resources)}) Extrayendo {resource.name} "
+                    f"({resource.strategy.value})...",
+                    flush=True,
+                )
                 stage = self._start_stage(run, resource.name)
                 try:
                     result = await self._extract_with_strategy(
@@ -90,22 +102,37 @@ class PipelineRunner:
                     )
                     self._finish_stage(stage, "success", result)
                     self._update_checkpoint(resource.name, run.id)
+                    self.session.commit()
                     metrics["resources"][resource.name] = result
+                    print(
+                        f"[sync] {resource.name} OK extracted={result.get('extracted', 0)} "
+                        f"loaded={result.get('loaded', 0)}",
+                        flush=True,
+                    )
                 except AlegraClientError as exc:
                     if exc.status_code == 403:
                         self._finish_stage(stage, "skipped", {"reason": str(exc)})
+                        self.session.commit()
+                        print(f"[sync] {resource.name} skipped (403)", flush=True)
                     else:
                         self._finish_stage(stage, "failed", {}, str(exc))
                         self._finish_run(run, "failed", metrics, str(exc))
+                        self.session.commit()
+                        print(f"[sync] {resource.name} FAILED: {exc}", flush=True)
                         raise
                 except Exception as exc:
                     self._finish_stage(stage, "failed", {}, str(exc))
                     self._finish_run(run, "failed", metrics, str(exc))
+                    self.session.commit()
+                    print(f"[sync] {resource.name} FAILED: {exc}", flush=True)
                     raise
 
+        print("[sync] Controles de calidad...", flush=True)
         quality = run_quality_checks(self.session, run.id, self.settings.company_id)
         metrics["quality"] = quality
         self._finish_run(run, "success", metrics)
+        self.session.commit()
+        print("[sync] daily-sync terminado OK", flush=True)
         return run.id
 
     async def run_single_resource(

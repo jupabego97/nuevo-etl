@@ -41,7 +41,12 @@ class AlegraClient:
                 "Accept": "application/json",
                 "Authorization": settings.alegra_authorization_header(),
             },
-            timeout=settings.sync_request_timeout_seconds,
+            timeout=httpx.Timeout(
+                connect=15.0,
+                read=float(settings.sync_request_timeout_seconds),
+                write=30.0,
+                pool=15.0,
+            ),
         )
 
     async def aclose(self) -> None:
@@ -112,6 +117,9 @@ class AlegraClient:
             return list(records), meta if isinstance(meta, dict) else None
         if isinstance(body, list):
             return body, None
+        # Endpoints como /company devuelven un objeto único.
+        if isinstance(body, dict) and body:
+            return [body], {"total": 1}
         return [], None
 
     async def get_total_count(
