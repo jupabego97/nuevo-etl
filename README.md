@@ -53,19 +53,49 @@ alegra-etl serve-webhooks
 5. **Gold**: marts retail con joins por `item_id`, no por nombre
 6. **Webhooks**: FastAPI recibe eventos, persiste y reprocesa consultando Alegra
 
-## Railway
+## Railway (Opción A — BD dedicada)
 
-Despliega **dos servicios** desde este repo:
+### 1. Crear infraestructura
+
+1. En Railway, crea un **nuevo proyecto** (separado del de `cron-job`).
+2. Añade un servicio **PostgreSQL** nuevo — este será el único destino del ETL.
+3. Crea **dos servicios** desde este repo conectados al Postgres nuevo:
 
 | Servicio | Config | Comando |
 |----------|--------|---------|
 | Webhooks | `railway.json` | `uvicorn alegra_etl.web.app:app --host 0.0.0.0 --port $PORT` |
 | Cron ETL | `railway-cron.json` | `alegra-etl daily-sync` |
 
-Horario recomendado del cron:
+4. En **ambos servicios**, referencia las variables del Postgres nuevo (`DATABASE_URL`, etc.) — no uses la BD del cron legacy.
+
+### 2. Variables compartidas (webhooks + cron)
+
+```env
+DATABASE_URL=<postgres-nuevo-generado-por-railway>
+DB_SCHEMA=alegra_etl
+ALEGRA_EMAIL=...
+ALEGRA_TOKEN=...
+WEBHOOK_SECRET=<secreto-largo-aleatorio>
+```
+
+### 3. Arranque inicial (una sola vez)
+
+Ejecuta en un shell de Railway o localmente contra el Postgres nuevo:
+
+```bash
+alegra-etl bootstrap
+alegra-etl migrate
+alegra-etl backfill
+```
+
+### 4. Cron
+
+Horario recomendado:
 
 - Colombia (UTC-5): 02:00
 - UTC equivalente: **07:00**
+
+## Railway (referencia general)
 
 Configura en Alegra webhooks hacia:
 
@@ -157,26 +187,26 @@ DATABASE_URL=postgresql+psycopg://user:pass@host:5432/railway
 DB_SCHEMA=alegra_etl
 ```
 
-### Decisión recomendada
+### Decisión de despliegue: **Opción A (BD dedicada)**
+
+Este proyecto se despliega con **PostgreSQL nueva**, separada del Postgres de `cron-job`. No comparte instancia ni tablas legacy.
 
 | Objetivo | Opción |
 |----------|--------|
-| Reemplazar `cron-job` y arrancar limpio | **A — BD nueva** |
-| Validar métricas lado a lado antes de migrar | **B — Misma BD** |
+| Reemplazar `cron-job` y arrancar limpio | **A — BD nueva** ← elegida |
+| Validar métricas lado a lado antes de migrar | B — Misma BD |
 
-En ambos casos el código, migraciones y comandos CLI son idénticos.
+En ambos casos el código, migraciones y comandos CLI son idénticos; solo cambia `DATABASE_URL`.
 
-## Transición desde cron-job
+## Transición desde cron-job (Opción A)
 
-### Con BD nueva (corte limpio)
-
-1. Crear Postgres dedicado y configurar `DATABASE_URL` en Railway.
+1. Crear Postgres dedicado en Railway y configurar `DATABASE_URL` en webhooks + cron.
 2. Ejecutar `bootstrap` → `migrate` → `backfill`.
 3. Validar con `reconcile` y revisar `gold_sales_30d`, `gold_replenishment`.
 4. Repuntar dashboards/consumidores al nuevo `DATABASE_URL`.
 5. Desactivar el cron legacy cuando los conteos coincidan con Alegra.
 
-### Con misma BD (convivencia temporal)
+### Alternativa: misma BD (Opción B — no usada en este despliegue)
 
 1. Mantener el `DATABASE_URL` actual; confirmar `DB_SCHEMA=alegra_etl`.
 2. Ejecutar `backfill` en `nuevo-etl` (no altera tablas de `public`).
