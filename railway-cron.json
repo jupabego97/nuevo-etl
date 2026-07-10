@@ -4,7 +4,7 @@
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "PYTHONPATH=/app/src alegra-etl daily-sync",
+    "startCommand": "PYTHONUNBUFFERED=1 PYTHONPATH=/app/src python -u -m alegra_etl daily-sync",
     "restartPolicyType": "NEVER"
   }
 }

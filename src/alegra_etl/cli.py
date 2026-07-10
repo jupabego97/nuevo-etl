@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import traceback
 
 import typer
 import uvicorn
@@ -17,7 +18,11 @@ from alegra_etl.pipeline.runner import PipelineRunner
 from alegra_etl.pipeline.webhook_processor import WebhookProcessor
 from alegra_etl.web.app import create_app
 
-app = typer.Typer(help="ETL productivo Alegra → PostgreSQL")
+app = typer.Typer(
+    help="ETL productivo Alegra → PostgreSQL",
+    pretty_exceptions_enable=False,
+    pretty_exceptions_show_locals=False,
+)
 
 
 def _setup() -> None:
@@ -30,9 +35,16 @@ def _run_migrations() -> None:
     from alembic.config import Config
 
     settings = get_settings()
+    print(f"[cli] Migrando esquema {settings.db_schema!r}...", flush=True)
     ensure_schema(settings)
     alembic_cfg = Config("alembic.ini")
-    command.upgrade(alembic_cfg, "head")
+    try:
+        command.upgrade(alembic_cfg, "head")
+    except Exception:
+        print("[cli] FALLO en migraciones:", flush=True)
+        traceback.print_exc()
+        raise
+    print("[cli] Migraciones OK", flush=True)
 
 
 @app.command("bootstrap")
@@ -76,6 +88,7 @@ def daily_sync() -> None:
     """Sincronización incremental diaria con ventana solapada."""
     _setup()
     settings = get_settings()
+    print("[cli] Iniciando daily-sync...", flush=True)
     _run_migrations()
 
     async def _run() -> None:
@@ -86,7 +99,12 @@ def daily_sync() -> None:
             marts = builder.build_all()
             typer.echo(f"Daily sync completado. run_id={run_id} marts={marts}")
 
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except Exception:
+        print("[cli] FALLO en daily-sync:", flush=True)
+        traceback.print_exc()
+        raise
 
 
 @app.command("reconcile")
@@ -149,8 +167,8 @@ def serve_webhooks() -> None:
 def main() -> None:
     try:
         app()
-    except Exception as exc:
-        typer.echo(f"Error: {exc}", err=True)
+    except Exception:
+        traceback.print_exc()
         sys.exit(1)
 
 
