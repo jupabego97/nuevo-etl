@@ -77,6 +77,13 @@ class AlegraClient:
                 status_code=response.status_code,
                 payload=_safe_json(response),
             )
+        if response.status_code == 401:
+            raise AlegraClientError(
+                "Alegra rechazó las credenciales (401). "
+                "Revisa ALEGRA_EMAIL + ALEGRA_TOKEN (o ALEGRA_API_KEY) en el servicio cron de Railway.",
+                status_code=401,
+                payload=_safe_json(response),
+            )
         if response.status_code == 403:
             raise AlegraClientError(
                 "Recurso no disponible para este plan/país",

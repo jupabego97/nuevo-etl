@@ -95,9 +95,14 @@ class Settings(BaseSettings):
 
     def alegra_authorization_header(self) -> str:
         if self.alegra_api_key and self.alegra_api_key.get_secret_value():
-            return f"Basic {self.alegra_api_key.get_secret_value()}"
+            key = self.alegra_api_key.get_secret_value().strip()
+            if key.lower().startswith("basic "):
+                key = key[6:].strip()
+            return f"Basic {key}"
         assert self.alegra_email and self.alegra_token
-        raw = f"{self.alegra_email}:{self.alegra_token.get_secret_value()}"
+        email = self.alegra_email.strip()
+        token = self.alegra_token.get_secret_value().strip()
+        raw = f"{email}:{token}"
         encoded = base64.b64encode(raw.encode()).decode()
         return f"Basic {encoded}"
 
