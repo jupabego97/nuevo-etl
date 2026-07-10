@@ -134,10 +134,20 @@ class AlegraClient:
         endpoint: str,
         extra_params: dict[str, Any] | None = None,
     ) -> int:
-        _, meta = await self.get_page(endpoint, start=0, limit=1, extra_params=extra_params, metadata=True)
-        if meta and "total" in meta:
-            return int(meta["total"])
-        records, _ = await self.get_page(endpoint, start=0, limit=self.settings.sync_page_size, extra_params=extra_params)
+        params = dict(extra_params or {})
+        try:
+            _, meta = await self.get_page(
+                endpoint, start=0, limit=1, extra_params=params, metadata=True
+            )
+            if meta and "total" in meta:
+                return int(meta["total"])
+        except AlegraClientError as exc:
+            if exc.status_code not in {400, 404}:
+                raise
+            logger.warning("metadata no soportado en %s (%s); se paginará sin total", endpoint, exc)
+        records, _ = await self.get_page(
+            endpoint, start=0, limit=self.settings.sync_page_size, extra_params=params
+        )
         return len(records)
 
     async def fetch_all_pages(
@@ -148,30 +158,43 @@ class AlegraClient:
         order_direction: str = "ASC",
     ) -> list[dict[str, Any]]:
         params = dict(extra_params or {})
-        params.setdefault("order_field", order_field)
-        params.setdefault("order_direction", order_direction)
-
-        total = await self.get_total_count(endpoint, extra_params=params)
-        if total == 0:
-            return []
+        if order_field:
+            params["order_field"] = order_field
+            params["order_direction"] = order_direction
 
         page_size = self.settings.sync_page_size
         all_records: list[dict[str, Any]] = []
-        for start in range(0, total, page_size):
-            page, _ = await self.get_page(endpoint, start=start, limit=page_size, extra_params=params)
-            if not page:
-                raise AlegraClientError(
-                    f"Página incompleta en {endpoint}: start={start}, esperado hasta {total}",
-                    status_code=None,
+        start = 0
+        use_order = bool(order_field)
+
+        while True:
+            try:
+                page, meta = await self.get_page(
+                    endpoint, start=start, limit=page_size, extra_params=params
                 )
+            except AlegraClientError as exc:
+                if exc.status_code == 400 and use_order:
+                    logger.warning(
+                        "order_field no soportado en %s; reintentando sin orden", endpoint
+                    )
+                    params.pop("order_field", None)
+                    params.pop("order_direction", None)
+                    use_order = False
+                    continue
+                raise
+
+            if not page:
+                break
             all_records.extend(page)
-        if len(all_records) != total:
-            logger.warning(
-                "Conteo divergente en %s: metadata=%s registros=%s",
-                endpoint,
-                total,
-                len(all_records),
-            )
+            if meta and "total" in meta and len(all_records) >= int(meta["total"]):
+                break
+            if len(page) < page_size:
+                break
+            start += page_size
+            # Seguridad ante bucles infinitos
+            if start > 1_000_000:
+                raise AlegraClientError(f"Paginación excesiva en {endpoint}", status_code=None)
+
         return all_records
 
     async def get_by_id(self, endpoint_template: str, resource_id: str) -> dict[str, Any]:
@@ -190,14 +213,27 @@ class AlegraClient:
     ) -> list[dict[str, Any]]:
         params = dict(extra_params or {})
         params["date"] = target_date
-        total = await self.get_total_count(endpoint, extra_params=params)
-        if total == 0:
-            return []
         page_size = self.settings.sync_page_size
         records: list[dict[str, Any]] = []
-        for start in range(0, total, page_size):
-            page, _ = await self.get_page(endpoint, start=start, limit=page_size, extra_params=params)
+        start = 0
+        while True:
+            try:
+                page, _ = await self.get_page(
+                    endpoint, start=start, limit=page_size, extra_params=params
+                )
+            except AlegraClientError as exc:
+                if exc.status_code == 400 and start == 0:
+                    # Algunos endpoints no aceptan paginación con date; un solo intento.
+                    page, _ = await self.get_page(endpoint, start=0, limit=page_size, extra_params={"date": target_date})
+                    records.extend(page)
+                    break
+                raise
+            if not page:
+                break
             records.extend(page)
+            if len(page) < page_size:
+                break
+            start += page_size
         return records
 
 

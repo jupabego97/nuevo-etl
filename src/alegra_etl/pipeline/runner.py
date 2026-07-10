@@ -54,7 +54,7 @@ class PipelineRunner:
                     self._update_checkpoint(resource.name, run.id)
                     metrics["resources"][resource.name] = result
                 except AlegraClientError as exc:
-                    if exc.status_code == 403:
+                    if exc.status_code in {400, 403, 404}:
                         self._finish_stage(stage, "skipped", {"reason": str(exc)})
                         metrics["resources"][resource.name] = {"status": "skipped"}
                     else:
@@ -110,10 +110,18 @@ class PipelineRunner:
                         flush=True,
                     )
                 except AlegraClientError as exc:
-                    if exc.status_code == 403:
-                        self._finish_stage(stage, "skipped", {"reason": str(exc)})
+                    # 403/400/404: recurso no disponible o params no soportados → skip, no tumbar el run
+                    if exc.status_code in {400, 403, 404}:
+                        self._finish_stage(stage, "skipped", {"reason": str(exc), "status": exc.status_code})
                         self.session.commit()
-                        print(f"[sync] {resource.name} skipped (403)", flush=True)
+                        metrics["resources"][resource.name] = {
+                            "status": "skipped",
+                            "reason": str(exc),
+                        }
+                        print(
+                            f"[sync] {resource.name} skipped ({exc.status_code})",
+                            flush=True,
+                        )
                     else:
                         self._finish_stage(stage, "failed", {}, str(exc))
                         self._finish_run(run, "failed", metrics, str(exc))

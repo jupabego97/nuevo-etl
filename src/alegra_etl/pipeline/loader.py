@@ -36,5 +36,7 @@ def upsert_rows(
         else:
             stmt = stmt.on_conflict_do_nothing(index_elements=conflict_columns)
         result = session.execute(stmt)
-        count += result.rowcount or len(chunk)
+        # psycopg puede devolver rowcount=-1; en Python -1 es truthy y rompe el contador.
+        rowcount = result.rowcount
+        count += len(chunk) if rowcount is None or rowcount < 0 else rowcount
     return count
