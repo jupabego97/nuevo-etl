@@ -209,9 +209,15 @@ class ResourceExtractor:
                     break
 
             if not day_completed and max_pages is not None:
+                # Día a medias: reanudar aquí con el offset actual.
                 metrics["completed"] = 0
                 metrics["next_offset"] = offset
                 metrics["cursor_date"] = current.isoformat()
+                print(
+                    f"[extract] {resource.name} pausa en {current.isoformat()} "
+                    f"offset={offset} (lote acotado)",
+                    flush=True,
+                )
                 return metrics
 
             print(
@@ -221,7 +227,15 @@ class ResourceExtractor:
             )
             current += timedelta(days=1)
 
-        metrics["cursor_date"] = end_date.isoformat()
+        # cursor_date = próximo día a procesar (el siguiente al último terminado).
+        next_cursor = end_date + timedelta(days=1)
+        metrics["cursor_date"] = next_cursor.isoformat()
+        metrics["completed"] = 1
+        metrics["next_offset"] = 0
+        print(
+            f"[extract] {resource.name} lote OK → próximo cursor={next_cursor.isoformat()}",
+            flush=True,
+        )
         return metrics
 
     async def _persist_records(

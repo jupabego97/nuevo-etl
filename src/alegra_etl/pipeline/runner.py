@@ -146,8 +146,13 @@ class PipelineRunner:
                 self._finish_stage(stage, "success", result)
                 self._finish_run(run, "success", {"resource": target.name, **result})
                 self.session.commit()
-                print(f"[backfill-step] OK {target.name} {result}", flush=True)
-                return {"resource": target.name, "run_id": str(run.id), **result}
+                print(
+                    f"[backfill-step] OK {target.name} extracted={result.get('extracted', 0)} "
+                    f"cursor={result.get('cursor_date')} offset={result.get('next_offset', 0)} "
+                    f"status={checkpoint.status}",
+                    flush=True,
+                )
+                return {"resource": target.name, "run_id": str(run.id), "checkpoint_status": checkpoint.status, **result}
             except AlegraClientError as exc:
                 if self._should_skip_error(target, exc):
                     self._finish_stage(stage, "skipped", {"reason": str(exc)})

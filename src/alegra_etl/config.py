@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # Ventana de solape para documentos (facturas, bills, etc.). 3 días = cron más corto/seguro.
     sync_overlap_days: int = Field(default=3, alias="SYNC_OVERLAP_DAYS", ge=1, le=90)
     sync_page_size: int = Field(default=30, alias="SYNC_PAGE_SIZE", ge=1, le=30)
-    sync_max_concurrent: int = Field(default=5, alias="SYNC_MAX_CONCURRENT", ge=1, le=20)
+    sync_max_concurrent: int = Field(default=8, alias="SYNC_MAX_CONCURRENT", ge=1, le=20)
     sync_request_timeout_seconds: int = Field(
         default=30,
         alias="SYNC_REQUEST_TIMEOUT_SECONDS",
@@ -42,8 +42,9 @@ class Settings(BaseSettings):
         le=120,
     )
     backfill_start_date: str = Field(default="2022-01-01", alias="BACKFILL_START_DATE")
-    backfill_days_per_step: int = Field(default=1, alias="BACKFILL_DAYS_PER_STEP", ge=1, le=30)
-    backfill_pages_per_step: int = Field(default=5, alias="BACKFILL_PAGES_PER_STEP", ge=1, le=50)
+    # Lotes más agresivos: ~7 días por ejecución de backfill-step.
+    backfill_days_per_step: int = Field(default=7, alias="BACKFILL_DAYS_PER_STEP", ge=1, le=90)
+    backfill_pages_per_step: int = Field(default=20, alias="BACKFILL_PAGES_PER_STEP", ge=1, le=100)
     backfill_max_pages_per_day: int = Field(
         default=200,
         alias="BACKFILL_MAX_PAGES_PER_DAY",
