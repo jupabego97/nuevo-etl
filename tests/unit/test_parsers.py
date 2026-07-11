@@ -27,3 +27,23 @@ def test_parse_purchase_bill_keeps_bill_id(sample_bill):
     assert headers[0]["alegra_id"] == "201"
     assert lines[0]["bill_alegra_id"] == "201"
     assert lines[0]["item_alegra_id"] == "501"
+
+
+def test_parse_purchase_bill_mixed_item_and_category_share_keys():
+    bill = {
+        "id": "301",
+        "date": "2025-06-03",
+        "status": "open",
+        "provider": {"id": "10", "name": "Proveedor"},
+        "total": 150,
+        "purchases": {
+            "items": [{"id": "1", "name": "Item", "quantity": 1, "price": 50, "total": 50}],
+            "categories": [{"id": "9", "name": "Gasto", "quantity": 1, "price": 100, "total": 100}],
+        },
+    }
+    _headers, lines = parse_purchase_bills([bill], company_id=1)
+    assert len(lines) == 2
+    assert set(lines[0].keys()) == set(lines[1].keys())
+    assert lines[0]["category_alegra_id"] is None
+    assert lines[1]["item_alegra_id"] is None
+    assert lines[1]["category_alegra_id"] == "9"

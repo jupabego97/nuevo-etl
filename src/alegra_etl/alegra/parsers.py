@@ -263,12 +263,16 @@ def parse_purchase_bills(records: list[dict[str, Any]], company_id: int) -> tupl
         if isinstance(number_template, dict):
             bill_number = str(number_template.get("number")) if number_template.get("number") is not None else None
         currency = record.get("currency") or {}
+        bill_date = _parse_date(record.get("date"))
+        if bill_date is None:
+            # Columna NOT NULL; sin fecha no se puede tipar (queda en source_documents).
+            continue
         headers.append(
             {
                 "company_id": company_id,
                 "alegra_id": alegra_id,
                 "bill_number": bill_number,
-                "bill_date": _parse_date(record.get("date")),
+                "bill_date": bill_date,
                 "due_date": _parse_date(record.get("dueDate")),
                 "status": record.get("status"),
                 "bill_type": record.get("type") or "bill",
@@ -288,6 +292,7 @@ def parse_purchase_bills(records: list[dict[str, Any]], company_id: int) -> tupl
         line_no = 0
         for item in purchases.get("items") or []:
             line_no += 1
+            # Todas las líneas deben compartir las mismas claves (UPSERT multiparam).
             lines.append(
                 {
                     "company_id": company_id,
@@ -296,6 +301,8 @@ def parse_purchase_bills(records: list[dict[str, Any]], company_id: int) -> tupl
                     "line_kind": "item",
                     "item_alegra_id": _str_id(item.get("id")),
                     "item_name": item.get("name"),
+                    "category_alegra_id": None,
+                    "category_name": None,
                     "quantity": _dec(item.get("quantity")),
                     "unit_price": _dec(item.get("price")),
                     "line_total": _dec(item.get("total")),
@@ -310,6 +317,8 @@ def parse_purchase_bills(records: list[dict[str, Any]], company_id: int) -> tupl
                     "bill_alegra_id": alegra_id,
                     "line_number": line_no,
                     "line_kind": "category",
+                    "item_alegra_id": None,
+                    "item_name": None,
                     "category_alegra_id": _str_id(category.get("id")),
                     "category_name": category.get("name"),
                     "quantity": _dec(category.get("quantity")),

@@ -6,6 +6,7 @@ import logging
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -24,6 +25,12 @@ from alegra_etl.pipeline.extractor import ResourceExtractor
 from alegra_etl.quality.checks import run_quality_checks
 
 logger = logging.getLogger(__name__)
+
+_BOGOTA = ZoneInfo("America/Bogota")
+
+
+def _today_local() -> date:
+    return datetime.now(_BOGOTA).date()
 
 
 class PipelineRunner:
@@ -160,10 +167,14 @@ class PipelineRunner:
         self.session.commit()
         print(f"[sync] run_id={run.id}", flush=True)
         metrics: dict[str, Any] = {"resources": {}}
-        end_date = date.today()
+        end_date = _today_local()
         start_date = end_date - timedelta(days=self.settings.sync_overlap_days)
         resources = get_daily_sync_resources(self.settings)
-        print(f"[sync] Recursos daily: {len(resources)}", flush=True)
+        print(
+            f"[sync] Recursos daily: {len(resources)} "
+            f"ventana={start_date.isoformat()}..{end_date.isoformat()} (America/Bogota)",
+            flush=True,
+        )
 
         async with AlegraClient(self.settings) as client:
             extractor = ResourceExtractor(self.settings, client, self.session, run.id)
@@ -206,6 +217,7 @@ class PipelineRunner:
                     self._finish_stage(stage, "failed", {}, str(exc))
                     self._finish_run(run, "failed", metrics, str(exc))
                     self.session.commit()
+                    print(f"[sync] {resource.name} FAILED: {type(exc).__name__}: {exc}", flush=True)
                     raise
 
         quality = run_quality_checks(self.session, run.id, self.settings.company_id)

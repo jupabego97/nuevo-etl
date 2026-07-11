@@ -12,6 +12,16 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 
+def _normalize_row_keys(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Asegura el mismo conjunto de claves en todas las filas del lote."""
+    if not rows:
+        return rows
+    all_keys: set[str] = set()
+    for row in rows:
+        all_keys.update(row.keys())
+    return [{key: row.get(key) for key in all_keys} for row in rows]
+
+
 def upsert_rows(
     session: Session,
     table: Any,
@@ -19,7 +29,7 @@ def upsert_rows(
     conflict_columns: list[str],
     update_columns: list[str] | None = None,
 ) -> int:
-    rows_list = list(rows)
+    rows_list = _normalize_row_keys(list(rows))
     if not rows_list:
         return 0
 
