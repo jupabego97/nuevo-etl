@@ -108,6 +108,8 @@ class PipelineRunner:
         """Procesa un lote reanudable y termina con código 0."""
         run = self._create_run("backfill_step")
         self.session.commit()
+        self.checkpoints.close_excluded_from_backfill()
+        self.session.commit()
         resources = get_backfill_resources(self.settings)
         target: ResourceDefinition | None = None
         checkpoint: SyncCheckpoint | None = None
@@ -198,7 +200,7 @@ class PipelineRunner:
                         end_date=end_date if resource.strategy == SyncStrategy.DATE_WINDOW else None,
                     )
                     self._finish_stage(stage, "success", result)
-                    self.checkpoints.mark_daily_sync(resource.name, run.id)
+                    self.checkpoints.mark_daily_sync(resource, run.id)
                     self.session.commit()
                     metrics["resources"][resource.name] = result
                     print(
@@ -246,7 +248,7 @@ class PipelineRunner:
                 try:
                     result = await self._extract_with_strategy(extractor, resource)
                     self._finish_stage(stage, "success", result)
-                    self.checkpoints.mark_daily_sync(resource.name, run.id)
+                    self.checkpoints.mark_daily_sync(resource, run.id)
                     self.session.commit()
                     metrics["resources"][resource.name] = result
                 except AlegraClientError as exc:
@@ -280,7 +282,7 @@ class PipelineRunner:
                     extractor, resource, start_date=start_date, end_date=end_date
                 )
             self._finish_stage(stage, "success", result)
-            self.checkpoints.mark_daily_sync(resource.name, run.id)
+            self.checkpoints.mark_daily_sync(resource, run.id)
             self._finish_run(run, "success", {"resource": resource.name, **result})
             self.session.commit()
             return result

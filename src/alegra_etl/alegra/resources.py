@@ -78,6 +78,8 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         optional=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
+        include_in_backfill=False,
+        include_in_weekly_refresh=True,
     ),
     ResourceDefinition(
         "items",

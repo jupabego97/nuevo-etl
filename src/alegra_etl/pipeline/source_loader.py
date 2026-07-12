@@ -33,6 +33,18 @@ def _extract_status(record: dict[str, Any]) -> str | None:
     return str(status) if status is not None else None
 
 
+def _resolve_alegra_id(record: dict[str, Any], resource_name: str) -> str | None:
+    """Obtiene un id estable; endpoints singleton (company) pueden no traer `id`."""
+    for key in ("id", "idCompany", "companyId", "identification"):
+        value = record.get(key)
+        if value is not None and str(value).strip() != "":
+            return str(value)
+    # Documento único por recurso (p.ej. /company)
+    if resource_name == "company":
+        return "singleton"
+    return None
+
+
 def upsert_source_documents(
     session: Session,
     *,
@@ -47,14 +59,14 @@ def upsert_source_documents(
     now = datetime.now(UTC)
     rows: list[dict[str, Any]] = []
     for record in records:
-        alegra_id = record.get("id")
+        alegra_id = _resolve_alegra_id(record, resource.name)
         if alegra_id is None:
             continue
         rows.append(
             {
                 "company_id": company_id,
                 "resource_name": resource.name,
-                "alegra_id": str(alegra_id),
+                "alegra_id": alegra_id,
                 "payload": record,
                 "payload_hash": hash_payload(record),
                 "document_date": _extract_document_date(record),

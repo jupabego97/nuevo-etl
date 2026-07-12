@@ -51,7 +51,13 @@ class ResourceExtractor:
     ) -> dict[str, int]:
         if resource.strategy == SyncStrategy.FULL and not resource.supports_pagination:
             records = await self._fetch_single(resource)
-            return await self._persist_records(resource, records, request_params=resource.extra_params, page_start=0)
+            result = await self._persist_records(
+                resource, records, request_params=resource.extra_params, page_start=0
+            )
+            # Un solo documento (p.ej. /company): el lote termina en esta ejecución.
+            result["completed"] = 1
+            result["next_offset"] = 0
+            return result
 
         if resource.strategy == SyncStrategy.FULL:
             return await self._extract_full_paginated(

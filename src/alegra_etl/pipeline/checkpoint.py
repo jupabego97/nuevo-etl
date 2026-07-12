@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -11,6 +12,8 @@ from sqlalchemy.orm import Session
 from alegra_etl.alegra.resources import ResourceDefinition, SyncStrategy
 from alegra_etl.config import Settings
 from alegra_etl.db.models import SyncCheckpoint
+
+logger = logging.getLogger(__name__)
 
 _BOGOTA = ZoneInfo("America/Bogota")
 
@@ -34,7 +37,7 @@ class CheckpointManager:
         )
         today = _today_local()
         if checkpoint:
-            # Extiende el techo al presente mientras el recurso no esté completo.
+            self._maybe_reopen_false_completed(checkpoint, resource, today)
             if checkpoint.status != "completed":
                 checkpoint.backfill_end_date = today
                 if checkpoint.backfill_start_date is None:
@@ -58,6 +61,39 @@ class CheckpointManager:
         self.session.add(checkpoint)
         self.session.flush()
         return checkpoint
+
+    def _maybe_reopen_false_completed(
+        self,
+        checkpoint: SyncCheckpoint,
+        resource: ResourceDefinition,
+        today: date,
+    ) -> None:
+        """Reabre histórico marcado completed por daily-sync (sin backfill real)."""
+        if checkpoint.status != "completed":
+            return
+        if resource.strategy != SyncStrategy.DATE_WINDOW:
+            return
+        # Un backfill histórico real siempre deja backfill_completed_at.
+        if checkpoint.backfill_completed_at is not None:
+            return
+
+        checkpoint.status = "pending"
+        checkpoint.backfill_start_date = checkpoint.backfill_start_date or self.backfill_start
+        checkpoint.backfill_end_date = today
+        checkpoint.cursor_date = checkpoint.cursor_date or checkpoint.backfill_start_date or self.backfill_start
+        checkpoint.cursor_offset = 0
+        meta = dict(checkpoint.metadata_json or {})
+        meta["reopened_from_false_completed"] = datetime.now(UTC).isoformat()
+        checkpoint.metadata_json = meta
+        print(
+            f"[checkpoint] Reabriendo {resource.name}: estaba completed sin "
+            f"backfill_completed_at (probable daily-sync). cursor={checkpoint.cursor_date}",
+            flush=True,
+        )
+        logger.warning(
+            "Reabriendo checkpoint %s: completed sin backfill histórico real",
+            resource.name,
+        )
 
     def is_backfill_complete(self, resource: ResourceDefinition) -> bool:
         checkpoint = self.get_or_create(resource)
@@ -95,7 +131,6 @@ class CheckpointManager:
 
             if completed:
                 checkpoint.cursor_offset = 0
-                # cursor_date ya apunta al día siguiente al lote terminado
                 if checkpoint.cursor_date and checkpoint.cursor_date > end:
                     checkpoint.status = "completed"
                     checkpoint.backfill_completed_at = datetime.now(UTC)
@@ -117,25 +152,67 @@ class CheckpointManager:
         checkpoint.status = "failed"
         checkpoint.metadata_json = {**(checkpoint.metadata_json or {}), "last_error": error}
 
-    def mark_daily_sync(self, resource_name: str, run_id: uuid.UUID) -> None:
+    def close_excluded_from_backfill(self) -> None:
+        """Cierra checkpoints de recursos que ya no participan en backfill (ej. company)."""
+        from alegra_etl.alegra.resources import RESOURCE_REGISTRY
+
+        excluded = {r.name for r in RESOURCE_REGISTRY if not r.include_in_backfill}
+        if not excluded:
+            return
+        now = datetime.now(UTC)
+        rows = (
+            self.session.query(SyncCheckpoint)
+            .filter(
+                SyncCheckpoint.company_id == self.company_id,
+                SyncCheckpoint.resource_name.in_(excluded),
+                SyncCheckpoint.status != "completed",
+            )
+            .all()
+        )
+        for row in rows:
+            row.status = "completed"
+            row.backfill_completed_at = now
+            print(
+                f"[checkpoint] Cerrando {row.resource_name}: excluido del backfill histórico",
+                flush=True,
+            )
+
+    def mark_daily_sync(self, resource: ResourceDefinition, run_id: uuid.UUID) -> None:
+        """Registra que el daily tocó el recurso sin cerrar el backfill histórico.
+
+        Nunca pone status=completed: eso solo lo hace update_after_batch del backfill
+        cuando el cursor supera backfill_end_date (o un FULL termina del todo).
+        """
         checkpoint = (
             self.session.query(SyncCheckpoint)
-            .filter_by(company_id=self.company_id, resource_name=resource_name)
+            .filter_by(company_id=self.company_id, resource_name=resource.name)
             .one_or_none()
         )
         now = datetime.now(UTC)
+        today = _today_local()
         if checkpoint is None:
             checkpoint = SyncCheckpoint(
                 company_id=self.company_id,
-                resource_name=resource_name,
-                status="completed",
+                resource_name=resource.name,
+                # pending: el histórico aún puede estar incompleto
+                status="pending",
                 last_successful_run_id=run_id,
                 last_synced_at=now,
+                backfill_start_date=self.backfill_start,
+                backfill_end_date=today,
+                cursor_date=self.backfill_start if resource.strategy == SyncStrategy.DATE_WINDOW else None,
+                cursor_offset=0,
+                metadata_json={"last_daily_sync_at": now.isoformat()},
             )
             self.session.add(checkpoint)
-        else:
-            checkpoint.last_successful_run_id = run_id
-            checkpoint.last_synced_at = now
+            return
+
+        checkpoint.last_successful_run_id = run_id
+        checkpoint.last_synced_at = now
+        meta = dict(checkpoint.metadata_json or {})
+        meta["last_daily_sync_at"] = now.isoformat()
+        checkpoint.metadata_json = meta
+        # No tocar status / cursor / backfill_completed_at
 
     def backfill_window(self, resource: ResourceDefinition, checkpoint: SyncCheckpoint) -> tuple[date, date]:
         end = checkpoint.backfill_end_date or _today_local()
