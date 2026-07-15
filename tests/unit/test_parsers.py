@@ -7,11 +7,38 @@ def test_parse_sales_invoice_splits_header_and_lines(sample_invoice):
     assert headers[0]["alegra_id"] == "101"
     assert headers[0]["invoice_total"] == 119
     assert headers[0]["total_paid"] == 119
+    assert headers[0]["invoice_number"] == "FE1001"
+    assert headers[0]["number_template_id"] == "3"
+    assert headers[0]["number_prefix"] == "FE"
+    assert headers[0]["number_value"] == "1001"
+    assert headers[0]["is_electronic"] is True
+    assert headers[0]["cufe"] == "abc123cufe"
     assert len(lines) == 1
     assert lines[0]["item_alegra_id"] == "501"
     assert lines[0]["line_total"] == 100
     assert len(payments) == 1
     assert len(applications) == 1
+
+
+def test_parse_sales_invoice_ordinary_numbering():
+    invoice = {
+        "id": "202",
+        "date": "2025-06-02",
+        "numberTemplate": {
+            "id": "1",
+            "name": "Factura ordinaria",
+            "prefix": "FV-",
+            "number": 88,
+            "isElectronic": False,
+        },
+        "total": 10,
+        "items": [],
+        "retentions": [],
+    }
+    headers, _, _, _ = parse_sales_invoices([invoice], company_id=1)
+    assert headers[0]["is_electronic"] is False
+    assert headers[0]["invoice_number"] == "FV-88"
+    assert headers[0]["cufe"] is None
 
 
 def test_parse_items_extracts_inventory_and_prices(sample_item):

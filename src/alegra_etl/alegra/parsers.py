@@ -159,6 +159,69 @@ def parse_contacts(records: list[dict[str, Any]], company_id: int) -> list[dict]
     return rows
 
 
+def _boolish(value: Any) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "si", "sí"}:
+        return True
+    if text in {"false", "0", "no"}:
+        return False
+    return None
+
+
+def _invoice_numbering(record: dict[str, Any]) -> dict[str, Any]:
+    """Extrae numeración y señales de factura electrónica desde payload Alegra."""
+    number_template = record.get("numberTemplate") or {}
+    if not isinstance(number_template, dict):
+        number_template = {}
+
+    prefix_raw = number_template.get("prefix")
+    prefix = str(prefix_raw).strip() if prefix_raw not in (None, "") else None
+    number_raw = number_template.get("number")
+    number_value = str(number_raw) if number_raw is not None else None
+    if prefix and number_value is not None:
+        invoice_number = f"{prefix}{number_value}"
+    elif number_value is not None:
+        invoice_number = number_value
+    else:
+        invoice_number = prefix
+
+    is_electronic = _boolish(number_template.get("isElectronic"))
+    if is_electronic is None:
+        is_electronic = _boolish(record.get("isElectronic"))
+
+    cufe = None
+    for key in ("cufe", "CUFE"):
+        value = record.get(key)
+        if value:
+            cufe = str(value)
+            break
+    if cufe is None:
+        stamp = record.get("stamp")
+        if isinstance(stamp, dict):
+            for key in ("cufe", "uuid"):
+                if stamp.get(key):
+                    cufe = str(stamp[key])
+                    break
+
+    # Heurística segura: presencia de CUFE implica electrónica.
+    if is_electronic is None and cufe:
+        is_electronic = True
+
+    return {
+        "invoice_number": invoice_number,
+        "number_template_id": _str_id(number_template.get("id")),
+        "number_template_name": number_template.get("name") or number_template.get("documentName"),
+        "number_prefix": prefix,
+        "number_value": number_value,
+        "is_electronic": is_electronic,
+        "cufe": cufe,
+    }
+
+
 def parse_sales_invoices(records: list[dict[str, Any]], company_id: int) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     headers: list[dict] = []
     lines: list[dict] = []
@@ -169,19 +232,14 @@ def parse_sales_invoices(records: list[dict[str, Any]], company_id: int) -> tupl
         alegra_id = _str_id(record.get("id"))
         if not alegra_id:
             continue
-        number_template = record.get("numberTemplate") or {}
-        invoice_number = None
-        if isinstance(number_template, dict):
-            prefix = number_template.get("prefix") or ""
-            number = number_template.get("number")
-            invoice_number = f"{prefix}{number}" if number is not None else prefix or None
+        numbering = _invoice_numbering(record)
 
         currency = record.get("currency") or {}
         headers.append(
             {
                 "company_id": company_id,
                 "alegra_id": alegra_id,
-                "invoice_number": invoice_number,
+                **numbering,
                 "invoice_date": _parse_date(record.get("date")),
                 "due_date": _parse_date(record.get("dueDate")),
                 "datetime_utc": record.get("datetime"),

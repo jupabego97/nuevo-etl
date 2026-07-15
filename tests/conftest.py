@@ -28,7 +28,8 @@ def settings(monkeypatch):
 
 
 @pytest.fixture
-def sample_invoice() -> dict:    return {
+def sample_invoice() -> dict:
+    return {
         "id": "101",
         "date": "2025-06-01",
         "dueDate": "2025-06-15",
@@ -36,7 +37,14 @@ def sample_invoice() -> dict:    return {
         "status": "open",
         "client": {"id": "1", "name": "Cliente Demo"},
         "seller": {"id": "2", "name": "Vendedor Demo"},
-        "numberTemplate": {"prefix": "FV-", "number": 1001},
+        "numberTemplate": {
+            "id": "3",
+            "name": "Factura electrónica",
+            "prefix": "FE",
+            "number": 1001,
+            "isElectronic": True,
+        },
+        "cufe": "abc123cufe",
         "currency": {"code": "COP", "exchangeRate": 1},
         "subtotal": 100,
         "discount": 0,
