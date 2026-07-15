@@ -40,8 +40,10 @@ alegra-etl backfill
 alegra-etl daily-sync
 alegra-etl reconcile --resource invoices --days 30
 alegra-etl process-webhooks
-# En Railway shell (si alegra-etl no está en PATH):
-# PYTHONPATH=/app/src python -m alegra_etl process-webhooks
+# En Railway shell usa el Python del venv (no el del sistema):
+#   /opt/venv/bin/python -m alegra_etl process-webhooks
+# Alternativa HTTP (tras redeploy):
+#   curl -X POST "https://TU-DOMINIO/webhooks/process-pending?token=TU_SECRET"
 alegra-etl build-marts
 alegra-etl serve-webhooks
 ```
