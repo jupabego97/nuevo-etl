@@ -50,6 +50,7 @@ class ResourceDefinition:
     supports_date_filter: bool = False
     supports_metadata: bool = True
     has_typed_loader: bool = False
+    source_only: bool = False
     parser: str | None = None
     priority: ResourcePriority = ResourcePriority.MEDIUM
     include_in_daily_sync: bool = True
@@ -75,6 +76,8 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         extra_params={},
         supports_pagination=False,
         supports_metadata=False,
+        has_typed_loader=True,
+        parser="company",
         optional=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
@@ -137,6 +140,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         SyncStrategy.FULL,
         order_field="",
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
         include_in_weekly_refresh=True,
@@ -148,6 +152,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         SyncStrategy.FULL,
         order_field="",
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
         include_in_weekly_refresh=True,
@@ -159,6 +164,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         SyncStrategy.FULL,
         order_field="",
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -180,6 +186,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         ResourceGroup.CONFIG,
         SyncStrategy.FULL,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -188,6 +195,8 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         "currencies",
         ResourceGroup.CONFIG,
         SyncStrategy.FULL,
+        has_typed_loader=True,
+        parser="currencies",
         optional=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
@@ -199,6 +208,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         ResourceGroup.CONFIG,
         SyncStrategy.FULL,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -208,6 +218,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         ResourceGroup.CONFIG,
         SyncStrategy.FULL,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -251,6 +262,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         SyncStrategy.DATE_WINDOW,
         supports_date_filter=True,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
     ),
     ResourceDefinition(
@@ -260,6 +272,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         SyncStrategy.DATE_WINDOW,
         supports_date_filter=True,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -270,6 +283,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         SyncStrategy.DATE_WINDOW,
         supports_date_filter=True,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -279,6 +293,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         ResourceGroup.INCOME,
         SyncStrategy.FULL,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -303,6 +318,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         extra_params={"type": "out"},
         supports_date_filter=True,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.MEDIUM,
         include_in_daily_sync=False,
     ),
@@ -312,6 +328,8 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         ResourceGroup.EXPENSE,
         SyncStrategy.DATE_WINDOW,
         supports_date_filter=True,
+        has_typed_loader=True,
+        parser="purchase_orders",
         optional=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
@@ -323,6 +341,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         SyncStrategy.DATE_WINDOW,
         supports_date_filter=True,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -332,6 +351,8 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         ResourceGroup.INVENTORY,
         SyncStrategy.DATE_WINDOW,
         supports_date_filter=True,
+        has_typed_loader=True,
+        parser="inventory_adjustments",
         optional=True,
         priority=ResourcePriority.MEDIUM,
         include_in_daily_sync=False,
@@ -342,6 +363,8 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         ResourceGroup.INVENTORY,
         SyncStrategy.DATE_WINDOW,
         supports_date_filter=True,
+        has_typed_loader=True,
+        parser="warehouse_transfers",
         optional=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
@@ -353,6 +376,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         SyncStrategy.FULL,
         feature_flag="enable_accounting",
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -362,6 +386,8 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         ResourceGroup.ACCOUNTING,
         SyncStrategy.FULL,
         feature_flag="enable_accounting",
+        has_typed_loader=True,
+        parser="cost_centers",
         optional=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
@@ -374,6 +400,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         feature_flag="enable_accounting",
         supports_date_filter=True,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -383,6 +410,8 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         ResourceGroup.BANKS,
         SyncStrategy.FULL,
         feature_flag="enable_banks",
+        has_typed_loader=True,
+        parser="bank_accounts",
         optional=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
@@ -396,6 +425,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         feature_flag="enable_banks",
         supports_date_filter=True,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -407,6 +437,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         feature_flag="enable_global_invoices",
         supports_date_filter=True,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -418,6 +449,7 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         feature_flag="enable_transportation_receipts",
         supports_date_filter=True,
         optional=True,
+        source_only=True,
         priority=ResourcePriority.LOW,
         include_in_daily_sync=False,
     ),
@@ -471,3 +503,17 @@ def resource_for_webhook_event(event_type: str) -> ResourceDefinition | None:
         if event_type in resource.webhook_events:
             return resource
     return None
+
+
+def validate_resource_coverage() -> list[str]:
+    """Cada recurso habilitado debe ser typed o source_only explícito."""
+    issues: list[str] = []
+    for resource in RESOURCE_REGISTRY:
+        if not resource.enabled:
+            continue
+        if resource.has_typed_loader and resource.source_only:
+            issues.append(f"{resource.name}: typed y source_only simultáneo")
+        if not resource.has_typed_loader and not resource.source_only and resource.include_in_backfill:
+            if not resource.optional:
+                issues.append(f"{resource.name}: sin loader ni source_only")
+    return issues

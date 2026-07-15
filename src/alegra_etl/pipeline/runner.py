@@ -20,7 +20,10 @@ from alegra_etl.alegra.resources import (
 )
 from alegra_etl.config import Settings
 from alegra_etl.db.models import EtlRun, EtlStageRun, SyncCheckpoint
+from alegra_etl.pipeline.advisory_lock import release_backfill_lock, try_acquire_backfill_lock
 from alegra_etl.pipeline.checkpoint import CheckpointManager
+from alegra_etl.pipeline.checkpoint_integrity import repair_all_invalid
+from alegra_etl.pipeline.completion_gate import global_backfill_status
 from alegra_etl.pipeline.extractor import ResourceExtractor
 from alegra_etl.quality.checks import run_quality_checks
 
@@ -82,7 +85,7 @@ class PipelineRunner:
                 except AlegraClientError as exc:
                     if self._should_skip_error(resource, exc):
                         self._finish_stage(stage, "skipped", {"reason": str(exc)})
-                        checkpoint.status = "completed"
+                        self.checkpoints.mark_skipped(checkpoint, str(exc))
                         metrics["resources"][resource.name] = {"status": "skipped"}
                         self.session.commit()
                     else:
@@ -108,65 +111,96 @@ class PipelineRunner:
         """Procesa un lote reanudable y termina con código 0."""
         run = self._create_run("backfill_step")
         self.session.commit()
+        repair_all_invalid(self.settings, self.session, apply=True)
+        self.session.commit()
         self.checkpoints.close_excluded_from_backfill()
         self.session.commit()
-        resources = get_backfill_resources(self.settings)
+        resources = {r.name: r for r in get_backfill_resources(self.settings)}
+        checkpoints = (
+            self.session.query(SyncCheckpoint)
+            .filter_by(company_id=self.settings.company_id)
+            .all()
+        )
+        status = global_backfill_status(self.session, self.settings, resources, checkpoints)
+        if status["safe_to_stop_backfill"] and status["all_backfill_complete"]:
+            self._finish_run(run, "success", {"status": "all_completed", **status})
+            self.session.commit()
+            print("[backfill-step] Histórico completo (verificado)", flush=True)
+            return {"status": "all_completed", "run_id": str(run.id), **status}
+
         target: ResourceDefinition | None = None
         checkpoint: SyncCheckpoint | None = None
 
-        for resource in resources:
+        for resource in get_backfill_resources(self.settings):
             cp = self.checkpoints.get_or_create(resource)
-            if cp.status != "completed":
+            if cp.status not in {"completed", "skipped"}:
                 target = resource
                 checkpoint = cp
                 break
 
         if not target or not checkpoint:
-            self._finish_run(run, "success", {"status": "all_completed"})
+            self._finish_run(run, "success", {"status": "all_completed", **status})
             self.session.commit()
-            print("[backfill-step] Histórico completo", flush=True)
-            return {"status": "all_completed", "run_id": str(run.id)}
+            print("[backfill-step] Sin trabajo pendiente", flush=True)
+            return {"status": "all_completed", "run_id": str(run.id), **status}
+
+        if not try_acquire_backfill_lock(self.session, self.settings.company_id, target.name):
+            self._finish_run(run, "success", {"status": "locked", "resource": target.name})
+            self.session.commit()
+            print(f"[backfill-step] {target.name} bloqueado por otro worker", flush=True)
+            return {"status": "locked", "resource": target.name, "run_id": str(run.id)}
 
         print(f"[backfill-step] Recurso={target.name} status={checkpoint.status}", flush=True)
         stage = self._start_stage(run, target.name)
         self.checkpoints.mark_running(checkpoint, run.id)
         self.session.commit()
 
-        async with AlegraClient(self.settings) as client:
-            extractor = ResourceExtractor(self.settings, client, self.session, run.id)
-            try:
-                start, end = self.checkpoints.backfill_window(target, checkpoint)
-                result = await self._extract_with_strategy(
-                    extractor,
-                    target,
-                    start_date=start if target.strategy == SyncStrategy.DATE_WINDOW else None,
-                    end_date=end if target.strategy == SyncStrategy.DATE_WINDOW else None,
-                    start_offset=checkpoint.cursor_offset,
-                    max_pages=self.settings.backfill_pages_per_step,
+        try:
+            async with AlegraClient(self.settings) as client:
+                extractor = ResourceExtractor(
+                    self.settings, client, self.session, run.id, strict_backfill=True
                 )
-                self.checkpoints.update_after_batch(checkpoint, target, result, run.id)
-                self._finish_stage(stage, "success", result)
-                self._finish_run(run, "success", {"resource": target.name, **result})
-                self.session.commit()
-                print(
-                    f"[backfill-step] OK {target.name} extracted={result.get('extracted', 0)} "
-                    f"cursor={result.get('cursor_date')} offset={result.get('next_offset', 0)} "
-                    f"status={checkpoint.status}",
-                    flush=True,
-                )
-                return {"resource": target.name, "run_id": str(run.id), "checkpoint_status": checkpoint.status, **result}
-            except AlegraClientError as exc:
-                if self._should_skip_error(target, exc):
-                    self._finish_stage(stage, "skipped", {"reason": str(exc)})
-                    checkpoint.status = "completed"
-                    self._finish_run(run, "success", {"resource": target.name, "status": "skipped"})
+                try:
+                    start, end = self.checkpoints.backfill_window(target, checkpoint)
+                    result = await self._extract_with_strategy(
+                        extractor,
+                        target,
+                        start_date=start if target.strategy == SyncStrategy.DATE_WINDOW else None,
+                        end_date=end if target.strategy == SyncStrategy.DATE_WINDOW else None,
+                        start_offset=checkpoint.cursor_offset,
+                        max_pages=self.settings.backfill_pages_per_step,
+                    )
+                    self.checkpoints.update_after_batch(checkpoint, target, result, run.id)
+                    self._finish_stage(stage, "success", result)
+                    self._finish_run(run, "success", {"resource": target.name, **result})
                     self.session.commit()
-                    return {"resource": target.name, "status": "skipped", "reason": str(exc)}
-                self.checkpoints.mark_failed(checkpoint, str(exc))
-                self._finish_stage(stage, "failed", {}, str(exc))
-                self._finish_run(run, "failed", {"resource": target.name}, str(exc))
-                self.session.commit()
-                raise
+                    print(
+                        f"[backfill-step] OK {target.name} extracted={result.get('extracted', 0)} "
+                        f"cursor={result.get('cursor_date')} offset={result.get('next_offset', 0)} "
+                        f"status={checkpoint.status}",
+                        flush=True,
+                    )
+                    return {
+                        "resource": target.name,
+                        "run_id": str(run.id),
+                        "checkpoint_status": checkpoint.status,
+                        **result,
+                    }
+                except AlegraClientError as exc:
+                    if self._should_skip_error(target, exc):
+                        self._finish_stage(stage, "skipped", {"reason": str(exc)})
+                        self.checkpoints.mark_skipped(checkpoint, str(exc))
+                        self._finish_run(run, "success", {"resource": target.name, "status": "skipped"})
+                        self.session.commit()
+                        return {"resource": target.name, "status": "skipped", "reason": str(exc)}
+                    self.checkpoints.mark_failed(checkpoint, str(exc))
+                    self._finish_stage(stage, "failed", {}, str(exc))
+                    self._finish_run(run, "failed", {"resource": target.name}, str(exc))
+                    self.session.commit()
+                    raise
+        finally:
+            release_backfill_lock(self.session, self.settings.company_id, target.name)
+            self.session.commit()
 
     async def run_daily_sync(self) -> uuid.UUID:
         print("[sync] Creando registro etl_run...", flush=True)

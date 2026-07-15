@@ -22,10 +22,6 @@ def settings(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_fetch_page_batch_concurrent_offsets(settings, httpx_mock):
-    httpx_mock.add_response(
-        method="GET",
-        json={"data": [{"id": "0"}], "metadata": {"total": 90}},
-    )
     for start in (0, 30, 60):
         httpx_mock.add_response(
             method="GET",
@@ -55,10 +51,6 @@ async def test_fetch_page_batch_concurrent_offsets(settings, httpx_mock):
 
 @pytest.mark.asyncio
 async def test_fetch_page_batch_resumes_from_offset(settings, httpx_mock):
-    httpx_mock.add_response(
-        method="GET",
-        json={"data": [{"id": "1"}], "metadata": {"total": 90}},
-    )
     httpx_mock.add_response(
         method="GET",
         json={"data": [{"id": "31"}], "metadata": {"total": 90}},

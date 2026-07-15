@@ -93,6 +93,12 @@ alegra-etl bootstrap
 alegra-etl migrate
 # Opción recomendada: backfill por lotes (cron cada 10-15 min con railway-backfill.json)
 alegra-etl backfill-step
+alegra-etl backfill-workers
+alegra-etl backfill-audit
+alegra-etl backfill-repair --apply
+alegra-etl backfill-status
+alegra-etl backfill-recover
+alegra-etl replay-source --resource invoices
 # Alternativa monolítica (solo local / volúmenes pequeños):
 # alegra-etl backfill
 ```

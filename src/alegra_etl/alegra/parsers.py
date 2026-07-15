@@ -233,6 +233,9 @@ def parse_sales_invoices(records: list[dict[str, Any]], company_id: int) -> tupl
         if not alegra_id:
             continue
         numbering = _invoice_numbering(record)
+        invoice_date = _parse_date(record.get("date"))
+        if invoice_date is None:
+            continue
 
         currency = record.get("currency") or {}
         headers.append(
@@ -240,7 +243,7 @@ def parse_sales_invoices(records: list[dict[str, Any]], company_id: int) -> tupl
                 "company_id": company_id,
                 "alegra_id": alegra_id,
                 **numbering,
-                "invoice_date": _parse_date(record.get("date")),
+                "invoice_date": invoice_date,
                 "due_date": _parse_date(record.get("dueDate")),
                 "datetime_utc": record.get("datetime"),
                 "status": record.get("status"),
@@ -395,11 +398,14 @@ def parse_credit_notes(records: list[dict[str, Any]], company_id: int) -> tuple[
         alegra_id = _str_id(record.get("id"))
         if not alegra_id:
             continue
+        note_date = _parse_date(record.get("date"))
+        if note_date is None:
+            continue
         headers.append(
             {
                 "company_id": company_id,
                 "alegra_id": alegra_id,
-                "note_date": _parse_date(record.get("date")),
+                "note_date": note_date,
                 "status": record.get("status"),
                 "client_alegra_id": _id(record.get("client")),
                 "note_total": _dec(record.get("total")),
@@ -440,6 +446,148 @@ def parse_simple_dimension(
                 "alegra_id": alegra_id,
                 "name": record.get(name_field) or alegra_id,
                 "status": record.get("status"),
+                "raw_json": record,
+            }
+        )
+    return rows
+
+
+def parse_company(records: list[dict[str, Any]], company_id: int) -> list[dict]:
+    rows = []
+    for record in records:
+        alegra_id = _str_id(record.get("id")) or "singleton"
+        rows.append(
+            {
+                "company_id": company_id,
+                "alegra_id": alegra_id,
+                "name": record.get("name"),
+                "identification": record.get("identification"),
+                "currency_code": (record.get("currency") or {}).get("code")
+                if isinstance(record.get("currency"), dict)
+                else record.get("currency"),
+                "raw_json": record,
+            }
+        )
+    return rows
+
+
+def parse_currencies(records: list[dict[str, Any]], company_id: int) -> list[dict]:
+    rows = []
+    for record in records:
+        code = record.get("code") or record.get("name")
+        if not code:
+            continue
+        rows.append(
+            {
+                "company_id": company_id,
+                "code": str(code),
+                "name": record.get("name"),
+                "symbol": record.get("symbol"),
+                "exchange_rate": _dec(record.get("exchangeRate") or record.get("rate")),
+                "is_default": bool(record.get("main") or record.get("isDefault")),
+            }
+        )
+    return rows
+
+
+def parse_cost_centers(records: list[dict[str, Any]], company_id: int) -> list[dict]:
+    rows = []
+    for record in records:
+        alegra_id = _str_id(record.get("id"))
+        if not alegra_id:
+            continue
+        rows.append(
+            {
+                "company_id": company_id,
+                "alegra_id": alegra_id,
+                "code": record.get("code"),
+                "name": record.get("name") or alegra_id,
+                "status": record.get("status"),
+            }
+        )
+    return rows
+
+
+def parse_bank_accounts(records: list[dict[str, Any]], company_id: int) -> list[dict]:
+    rows = []
+    for record in records:
+        alegra_id = _str_id(record.get("id"))
+        if not alegra_id:
+            continue
+        rows.append(
+            {
+                "company_id": company_id,
+                "alegra_id": alegra_id,
+                "name": record.get("name") or alegra_id,
+                "account_type": record.get("type") or record.get("accountType"),
+                "balance": _dec(record.get("balance")),
+                "currency_code": record.get("currency"),
+                "raw_json": record,
+            }
+        )
+    return rows
+
+
+def parse_purchase_orders(records: list[dict[str, Any]], company_id: int) -> list[dict]:
+    rows = []
+    for record in records:
+        alegra_id = _str_id(record.get("id"))
+        if not alegra_id:
+            continue
+        order_date = _parse_date(record.get("date"))
+        if order_date is None:
+            continue
+        rows.append(
+            {
+                "company_id": company_id,
+                "alegra_id": alegra_id,
+                "order_date": order_date,
+                "delivery_date": _parse_date(record.get("deliveryDate")),
+                "status": record.get("status"),
+                "provider_alegra_id": _id(record.get("provider") or record.get("client")),
+                "order_total": _dec(record.get("total")),
+                "raw_json": record,
+            }
+        )
+    return rows
+
+
+def parse_inventory_adjustments(records: list[dict[str, Any]], company_id: int) -> list[dict]:
+    rows = []
+    for record in records:
+        alegra_id = _str_id(record.get("id"))
+        if not alegra_id:
+            continue
+        adj_date = _parse_date(record.get("date"))
+        if adj_date is None:
+            continue
+        rows.append(
+            {
+                "company_id": company_id,
+                "alegra_id": alegra_id,
+                "adjustment_date": adj_date,
+                "warehouse_alegra_id": _id(record.get("warehouse")),
+                "raw_json": record,
+            }
+        )
+    return rows
+
+
+def parse_warehouse_transfers(records: list[dict[str, Any]], company_id: int) -> list[dict]:
+    rows = []
+    for record in records:
+        alegra_id = _str_id(record.get("id"))
+        if not alegra_id:
+            continue
+        rows.append(
+            {
+                "company_id": company_id,
+                "alegra_id": alegra_id,
+                "transfer_date": _parse_date(record.get("date")),
+                "origin_warehouse_id": _id(record.get("originWarehouse") or record.get("warehouseOrigin")),
+                "destination_warehouse_id": _id(
+                    record.get("destinationWarehouse") or record.get("warehouseDestination")
+                ),
                 "raw_json": record,
             }
         )

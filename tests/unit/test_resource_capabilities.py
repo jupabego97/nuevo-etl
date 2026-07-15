@@ -38,3 +38,26 @@ def test_backfill_orders_by_priority(settings):
     names = [r.name for r in resources]
     assert names.index("invoices") < names.index("estimates")
     assert names.index("bills") < names.index("terms")
+
+
+def test_resource_coverage_contract(settings):
+    from alegra_etl.alegra.resources import validate_resource_coverage
+
+    issues = validate_resource_coverage()
+    assert issues == []
+
+
+def test_new_typed_loaders_declared(settings):
+    for name in (
+        "company",
+        "currencies",
+        "cost-centers",
+        "bank-accounts",
+        "purchase-orders",
+        "inventory-adjustments",
+        "warehouse-transfers",
+    ):
+        resource = resource_by_name(name)
+        assert resource is not None
+        assert resource.has_typed_loader is True
+        assert resource.parser is not None

@@ -72,6 +72,8 @@ class SyncCheckpoint(Base, TimestampMixin):
     cursor_date: Mapped[date | None] = mapped_column(Date)
     cursor_offset: Mapped[int] = mapped_column(Integer, default=0)
     backfill_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    backfill_generation: Mapped[int] = mapped_column(Integer, default=1)
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=JSONB_EMPTY)
 
 

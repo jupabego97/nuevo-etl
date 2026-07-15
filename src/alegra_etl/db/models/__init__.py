@@ -1,5 +1,6 @@
 """Exportación de modelos SQLAlchemy."""
 
+from alegra_etl.db.models.backfill import BackfillWorkItem, EtlParseSkip
 from alegra_etl.db.models.base import Base
 from alegra_etl.db.models.canonical import SourceDocument
 from alegra_etl.db.models.control import EtlRun, EtlStageRun, QualityCheckResult, SyncCheckpoint
@@ -33,6 +34,7 @@ from alegra_etl.db.models.facts import (
 from alegra_etl.db.models.raw import DeadLetterEvent, RawDocument, WebhookEvent
 
 __all__ = [
+    "BackfillWorkItem",
     "Base",
     "DeadLetterEvent",
     "DimCompany",
@@ -46,6 +48,7 @@ __all__ = [
     "DimTax",
     "DimWarehouse",
     "EtlRun",
+    "EtlParseSkip",
     "EtlStageRun",
     "FactBankAccount",
     "FactCreditNote",

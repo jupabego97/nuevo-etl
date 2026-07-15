@@ -34,7 +34,7 @@ class AlegraClientError(Exception):
 class AlegraClient:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.rate_limiter = RateLimiter(max_requests_per_minute=150)
+        self.rate_limiter = RateLimiter(max_requests_per_minute=settings.alegra_max_requests_per_minute)
         self._client = httpx.AsyncClient(
             base_url=settings.alegra_base_url.rstrip("/"),
             headers={
@@ -133,7 +133,8 @@ class AlegraClient:
         self,
         endpoint: str,
         extra_params: dict[str, Any] | None = None,
-    ) -> int:
+    ) -> int | None:
+        """Total de registros si metadata lo expone; None si es desconocido."""
         params = dict(extra_params or {})
         try:
             _, meta = await self.get_page(
@@ -144,11 +145,8 @@ class AlegraClient:
         except AlegraClientError as exc:
             if exc.status_code not in {400, 404}:
                 raise
-            logger.warning("metadata no soportado en %s (%s); se paginará sin total", endpoint, exc)
-        records, _ = await self.get_page(
-            endpoint, start=0, limit=self.settings.sync_page_size, extra_params=params
-        )
-        return len(records)
+            logger.warning("metadata no soportado en %s (%s)", endpoint, exc)
+        return None
 
     async def fetch_all_pages(
         self,

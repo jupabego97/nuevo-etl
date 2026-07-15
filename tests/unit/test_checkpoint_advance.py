@@ -54,6 +54,10 @@ def test_cursor_advances_to_next_day_after_completed_batch(monkeypatch):
 
 def test_backfill_marks_completed_when_cursor_passes_end(monkeypatch):
     settings = _settings(monkeypatch)
+    monkeypatch.setattr(
+        "alegra_etl.pipeline.checkpoint.can_mark_backfill_completed",
+        lambda *args, **kwargs: True,
+    )
     manager = CheckpointManager(settings, MagicMock())
     resource = resource_by_name("invoices")
     assert resource is not None
@@ -140,6 +144,10 @@ def test_partial_day_keeps_same_cursor_and_offset(monkeypatch):
 
 def test_full_resource_completed_flag_marks_checkpoint(monkeypatch):
     settings = _settings(monkeypatch)
+    monkeypatch.setattr(
+        "alegra_etl.pipeline.checkpoint.can_mark_backfill_completed",
+        lambda *args, **kwargs: True,
+    )
     manager = CheckpointManager(settings, MagicMock())
     resource = resource_by_name("items")
     assert resource is not None
@@ -178,6 +186,8 @@ def test_reopen_false_completed_date_window(monkeypatch):
         backfill_start_date=None,
         backfill_end_date=None,
         backfill_completed_at=None,
+        verified_at=None,
+        backfill_generation=1,
         metadata_json={},
     )
     manager._maybe_reopen_false_completed(checkpoint, resource, date(2026, 7, 12))
@@ -201,6 +211,7 @@ def test_does_not_reopen_true_historical_completed(monkeypatch):
         backfill_completed_at=__import__("datetime").datetime.now(
             __import__("datetime").UTC
         ),
+        verified_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
         metadata_json={},
     )
     manager._maybe_reopen_false_completed(checkpoint, resource, date(2026, 7, 12))

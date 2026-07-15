@@ -9,9 +9,11 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from alegra_etl.alegra.resources import ResourceDefinition, SyncStrategy
+from alegra_etl.alegra.resources import ResourceDefinition, ResourcePriority, SyncStrategy
 from alegra_etl.config import Settings
 from alegra_etl.db.models import SyncCheckpoint
+from alegra_etl.pipeline.checkpoint_integrity import checkpoint_issues, is_truly_complete
+from alegra_etl.pipeline.completion_gate import can_mark_backfill_completed
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,7 @@ class CheckpointManager:
         )
         today = _today_local()
         if checkpoint:
-            self._maybe_reopen_false_completed(checkpoint, resource, today)
+            self._maybe_repair_inconsistent(checkpoint, resource, today)
             if checkpoint.status != "completed":
                 checkpoint.backfill_end_date = today
                 if checkpoint.backfill_start_date is None:
@@ -62,42 +64,85 @@ class CheckpointManager:
         self.session.flush()
         return checkpoint
 
+    def _maybe_repair_inconsistent(
+        self,
+        checkpoint: SyncCheckpoint,
+        resource: ResourceDefinition,
+        today: date,
+    ) -> None:
+        """Reabre checkpoints completed con invariantes rotas (incl. legacy con timestamp)."""
+        if checkpoint.status != "completed":
+            return
+
+        issues = checkpoint_issues(checkpoint, resource, today=today)
+        if not issues:
+            return
+
+        # FULL critical sin marca de backfill
+        if resource.strategy == SyncStrategy.FULL and "full_missing_completed_at" in issues:
+            if resource.priority not in {ResourcePriority.CRITICAL, ResourcePriority.HIGH}:
+                return
+
+        checkpoint.status = "pending"
+        checkpoint.backfill_start_date = checkpoint.backfill_start_date or self.backfill_start
+        checkpoint.backfill_end_date = today
+        if resource.strategy == SyncStrategy.DATE_WINDOW:
+            checkpoint.cursor_date = (
+                checkpoint.cursor_date
+                if checkpoint.cursor_date and "cursor_not_past_end" not in issues
+                else checkpoint.backfill_start_date or self.backfill_start
+            )
+        checkpoint.cursor_offset = 0
+        checkpoint.backfill_completed_at = None
+        checkpoint.verified_at = None
+        checkpoint.backfill_generation = (getattr(checkpoint, "backfill_generation", None) or 1) + 1
+        meta = dict(checkpoint.metadata_json or {})
+        meta["repaired_at"] = datetime.now(UTC).isoformat()
+        meta["repair_issues"] = issues
+        checkpoint.metadata_json = meta
+        print(
+            f"[checkpoint] Reparando {resource.name}: issues={issues} cursor={checkpoint.cursor_date}",
+            flush=True,
+        )
+        logger.warning("Reparando checkpoint %s: %s", resource.name, issues)
+
     def _maybe_reopen_false_completed(
         self,
         checkpoint: SyncCheckpoint,
         resource: ResourceDefinition,
         today: date,
     ) -> None:
-        """Reabre histórico marcado completed por daily-sync (sin backfill real)."""
-        if checkpoint.status != "completed":
-            return
-        if resource.strategy != SyncStrategy.DATE_WINDOW:
-            return
-        # Un backfill histórico real siempre deja backfill_completed_at.
-        if checkpoint.backfill_completed_at is not None:
-            return
+        """Alias legacy: delega en reparación ampliada."""
+        self._maybe_repair_inconsistent(checkpoint, resource, today)
 
-        checkpoint.status = "pending"
-        checkpoint.backfill_start_date = checkpoint.backfill_start_date or self.backfill_start
-        checkpoint.backfill_end_date = today
-        checkpoint.cursor_date = checkpoint.cursor_date or checkpoint.backfill_start_date or self.backfill_start
-        checkpoint.cursor_offset = 0
-        meta = dict(checkpoint.metadata_json or {})
-        meta["reopened_from_false_completed"] = datetime.now(UTC).isoformat()
-        checkpoint.metadata_json = meta
-        print(
-            f"[checkpoint] Reabriendo {resource.name}: estaba completed sin "
-            f"backfill_completed_at (probable daily-sync). cursor={checkpoint.cursor_date}",
-            flush=True,
+    def is_truly_complete(self, checkpoint: SyncCheckpoint, resource: ResourceDefinition) -> bool:
+        return is_truly_complete(checkpoint, resource, today=_today_local())
+
+    def repair_all_inconsistent(self) -> list[str]:
+        from alegra_etl.alegra.resources import get_backfill_resources, resource_by_name
+        from alegra_etl.pipeline.checkpoint_integrity import repair_checkpoint
+
+        repaired: list[str] = []
+        today = _today_local()
+        rows = (
+            self.session.query(SyncCheckpoint)
+            .filter_by(company_id=self.company_id)
+            .all()
         )
-        logger.warning(
-            "Reabriendo checkpoint %s: completed sin backfill histórico real",
-            resource.name,
-        )
+        backfill_names = {r.name for r in get_backfill_resources(self.settings)}
+        for row in rows:
+            if row.resource_name not in backfill_names:
+                continue
+            resource = resource_by_name(row.resource_name)
+            if not resource:
+                continue
+            if repair_checkpoint(row, resource, self.settings, reason="startup_repair"):
+                repaired.append(row.resource_name)
+        return repaired
 
     def is_backfill_complete(self, resource: ResourceDefinition) -> bool:
         checkpoint = self.get_or_create(resource)
-        return checkpoint.status == "completed"
+        return self.is_truly_complete(checkpoint, resource)
 
     def mark_running(self, checkpoint: SyncCheckpoint, run_id: uuid.UUID) -> None:
         checkpoint.status = "running"
@@ -128,12 +173,23 @@ class CheckpointManager:
 
             end = checkpoint.backfill_end_date or _today_local()
             checkpoint.backfill_end_date = end
+            if getattr(checkpoint, "backfill_start_date", None) is None:
+                checkpoint.backfill_start_date = self.backfill_start
 
             if completed:
                 checkpoint.cursor_offset = 0
-                if checkpoint.cursor_date and checkpoint.cursor_date > end:
-                    checkpoint.status = "completed"
-                    checkpoint.backfill_completed_at = datetime.now(UTC)
+                if (
+                    checkpoint.cursor_date
+                    and checkpoint.backfill_start_date
+                    and checkpoint.backfill_end_date
+                    and checkpoint.cursor_date > end
+                ):
+                    if self.try_mark_backfill_completed(checkpoint, resource):
+                        pass
+                    else:
+                        checkpoint.status = "pending"
+                        checkpoint.backfill_completed_at = None
+                        checkpoint.verified_at = None
                 else:
                     checkpoint.status = "pending"
             else:
@@ -142,11 +198,40 @@ class CheckpointManager:
 
         checkpoint.cursor_offset = int(result.get("next_offset", 0))
         if completed:
-            checkpoint.status = "completed"
-            checkpoint.backfill_completed_at = datetime.now(UTC)
-            checkpoint.cursor_offset = 0
+            if getattr(checkpoint, "backfill_start_date", None) is None:
+                checkpoint.backfill_start_date = self.backfill_start
+            if self.try_mark_backfill_completed(checkpoint, resource):
+                checkpoint.cursor_offset = 0
+            else:
+                checkpoint.status = "pending"
+                checkpoint.backfill_completed_at = None
         else:
             checkpoint.status = "pending"
+
+    def try_mark_backfill_completed(
+        self,
+        checkpoint: SyncCheckpoint,
+        resource: ResourceDefinition,
+    ) -> bool:
+        """Marca completed solo si pasa el gate de reconciliación/verificación."""
+        if not can_mark_backfill_completed(self.session, self.settings, checkpoint, resource):
+            blockers = checkpoint_issues(checkpoint, resource, today=_today_local())
+            logger.warning(
+                "No se puede cerrar %s: blockers=%s",
+                resource.name,
+                blockers,
+            )
+            return False
+        checkpoint.status = "completed"
+        checkpoint.backfill_completed_at = datetime.now(UTC)
+        checkpoint.verified_at = datetime.now(UTC)
+        return True
+
+    def mark_skipped(self, checkpoint: SyncCheckpoint, reason: str) -> None:
+        checkpoint.status = "skipped"
+        meta = dict(checkpoint.metadata_json or {})
+        meta["skip_reason"] = reason
+        checkpoint.metadata_json = meta
 
     def mark_failed(self, checkpoint: SyncCheckpoint, error: str) -> None:
         checkpoint.status = "failed"

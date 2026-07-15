@@ -51,6 +51,14 @@ class Settings(BaseSettings):
         ge=1,
         le=1000,
     )
+    backfill_strict_completion: bool = Field(default=True, alias="BACKFILL_STRICT_COMPLETION")
+    backfill_require_metadata: bool = Field(default=False, alias="BACKFILL_REQUIRE_METADATA")
+    backfill_concurrent_days: int = Field(default=4, alias="BACKFILL_CONCURRENT_DAYS", ge=1, le=16)
+    backfill_commit_every_pages: int = Field(default=5, alias="BACKFILL_COMMIT_EVERY_PAGES", ge=1, le=50)
+    backfill_work_batch_size: int = Field(default=8, alias="BACKFILL_WORK_BATCH_SIZE", ge=1, le=32)
+    alegra_max_requests_per_minute: int = Field(
+        default=120, alias="ALEGRA_MAX_REQUESTS_PER_MINUTE", ge=30, le=300
+    )
 
     webhook_secret: SecretStr = Field(..., alias="WEBHOOK_SECRET")
     webhook_host: str = Field(default="0.0.0.0", alias="WEBHOOK_HOST")

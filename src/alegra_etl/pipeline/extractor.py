@@ -15,7 +15,7 @@ from alegra_etl.config import Settings
 from alegra_etl.db.models import RawDocument
 from alegra_etl.pipeline.concurrent_fetch import fetch_date_page_batch, fetch_page_batch
 from alegra_etl.pipeline.source_loader import upsert_source_documents
-from alegra_etl.pipeline.typed_loader import transform_and_load
+from alegra_etl.pipeline.typed_loader import transform_and_load_resilient
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +33,22 @@ def _memory_mb() -> float:
 
 
 class ResourceExtractor:
-    def __init__(self, settings: Settings, client: AlegraClient, session: Session, run_id: uuid.UUID):
+    def __init__(
+        self,
+        settings: Settings,
+        client: AlegraClient,
+        session: Session,
+        run_id: uuid.UUID,
+        *,
+        strict_backfill: bool = False,
+    ):
         self.settings = settings
         self.client = client
         self.session = session
         self.run_id = run_id
         self.company_id = settings.company_id
+        self.strict_backfill = strict_backfill
+        self._pending_commits = 0
 
     async def extract_resource(
         self,
@@ -68,6 +78,10 @@ class ResourceExtractor:
 
         if resource.strategy == SyncStrategy.DATE_WINDOW:
             if not start_date or not end_date:
+                if self.strict_backfill:
+                    raise ValueError(
+                        f"Backfill DATE_WINDOW requiere start_date/end_date para {resource.name}"
+                    )
                 end_date = date.today()
                 start_date = end_date - timedelta(days=self.settings.sync_overlap_days)
             return await self._extract_date_window(
@@ -116,7 +130,8 @@ class ResourceExtractor:
                 for key in ("extracted", "source_upserted", "typed_upserted"):
                     metrics[key] += batch.get(key, 0)
                 metrics["pages"] += 1
-                self.session.commit()
+                metrics["skipped_typed"] = metrics.get("skipped_typed", 0) + batch.get("skipped_typed", 0)
+                self._maybe_commit()
                 print(
                     f"[extract] {resource.name} offset={page_offset} "
                     f"records={len(page)} mem={_memory_mb():.0f}MB",
@@ -132,6 +147,7 @@ class ResourceExtractor:
                 start_offset=offset,
                 max_pages=pages_per_batch,
                 on_page=on_page,
+                allow_parallel=bool(resource.order_field),
             )
             offset = result.next_offset
             if result.completed or max_pages is not None:
@@ -185,7 +201,8 @@ class ResourceExtractor:
                         metrics[key] += batch.get(key, 0)
                     metrics["pages"] += 1
                     pages_this_day += 1
-                    self.session.commit()
+                    metrics["skipped_typed"] = metrics.get("skipped_typed", 0) + batch.get("skipped_typed", 0)
+                    self._maybe_commit()
                     print(
                         f"[extract] {resource.name} {capture_day.isoformat()} offset={page_offset} "
                         f"records={len(page)} mem={_memory_mb():.0f}MB",
@@ -277,11 +294,29 @@ class ResourceExtractor:
             records=records,
             run_id=self.run_id,
         )
-        typed_upserted = transform_and_load(self.session, resource, records, self.company_id)
+        typed_upserted, skipped = transform_and_load_resilient(
+            self.session,
+            resource,
+            records,
+            self.company_id,
+            run_id=self.run_id,
+        )
 
         return {
             "extracted": len(records),
             "source_upserted": source_upserted,
             "typed_upserted": typed_upserted,
+            "skipped_typed": skipped,
             "loaded": typed_upserted,
         }
+
+    def _maybe_commit(self) -> None:
+        self._pending_commits += 1
+        if self._pending_commits >= self.settings.backfill_commit_every_pages:
+            self.session.commit()
+            self._pending_commits = 0
+        elif self._pending_commits == 1:
+            # Al menos un commit por página si commit_every=1
+            if self.settings.backfill_commit_every_pages <= 1:
+                self.session.commit()
+                self._pending_commits = 0

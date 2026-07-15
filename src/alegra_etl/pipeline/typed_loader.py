@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -10,30 +11,47 @@ from sqlalchemy import delete, update
 from sqlalchemy.orm import Session
 
 from alegra_etl.alegra.parsers import (
+    _parse_date,
+    _str_id,
+    parse_bank_accounts,
+    parse_company,
     parse_contacts,
+    parse_cost_centers,
     parse_credit_notes,
+    parse_currencies,
+    parse_inventory_adjustments,
     parse_items,
     parse_purchase_bills,
+    parse_purchase_orders,
     parse_sales_invoices,
     parse_simple_dimension,
+    parse_warehouse_transfers,
 )
 from alegra_etl.alegra.resources import ResourceDefinition
 from alegra_etl.db.models import (
+    DimCompany,
     DimContact,
+    DimCostCenter,
+    DimCurrency,
     DimItem,
     DimItemInventory,
     DimItemPrice,
     DimSeller,
     DimTax,
     DimWarehouse,
+    EtlParseSkip,
+    FactBankAccount,
     FactCreditNote,
     FactCreditNoteLine,
     FactIncomePayment,
     FactIncomePaymentApplication,
+    FactInventoryAdjustment,
     FactPurchaseBill,
     FactPurchaseBillLine,
+    FactPurchaseOrder,
     FactSalesInvoice,
     FactSalesInvoiceLine,
+    FactWarehouseTransfer,
 )
 from alegra_etl.pipeline.loader import upsert_rows
 
@@ -119,7 +137,9 @@ def transform_and_load(
     if parser == "taxes":
         rows = []
         for record in records:
-            alegra_id = str(record.get("id"))
+            alegra_id = _str_id(record.get("id"))
+            if not alegra_id:
+                continue
             rows.append(
                 {
                     "company_id": company_id,
@@ -144,8 +164,76 @@ def transform_and_load(
     if parser == "payments_income":
         return _load_payments_income(session, records, company_id)
 
+    if parser == "company":
+        rows = parse_company(records, company_id)
+        return upsert_rows(session, DimCompany.__table__, rows, ["company_id", "alegra_id"])
+
+    if parser == "currencies":
+        rows = parse_currencies(records, company_id)
+        return upsert_rows(session, DimCurrency.__table__, rows, ["company_id", "code"])
+
+    if parser == "cost_centers":
+        rows = parse_cost_centers(records, company_id)
+        return upsert_rows(session, DimCostCenter.__table__, rows, ["company_id", "alegra_id"])
+
+    if parser == "bank_accounts":
+        rows = parse_bank_accounts(records, company_id)
+        return upsert_rows(session, FactBankAccount.__table__, rows, ["company_id", "alegra_id"])
+
+    if parser == "purchase_orders":
+        rows = parse_purchase_orders(records, company_id)
+        return upsert_rows(session, FactPurchaseOrder.__table__, rows, ["company_id", "alegra_id"])
+
+    if parser == "inventory_adjustments":
+        rows = parse_inventory_adjustments(records, company_id)
+        return upsert_rows(session, FactInventoryAdjustment.__table__, rows, ["company_id", "alegra_id"])
+
+    if parser == "warehouse_transfers":
+        rows = parse_warehouse_transfers(records, company_id)
+        return upsert_rows(session, FactWarehouseTransfer.__table__, rows, ["company_id", "alegra_id"])
+
     logger.warning("Parser %s no implementado para %s", parser, resource.name)
     return 0
+
+
+def transform_and_load_resilient(
+    session: Session,
+    resource: ResourceDefinition,
+    records: list[dict[str, Any]],
+    company_id: int,
+    *,
+    run_id: uuid.UUID | None = None,
+) -> tuple[int, int]:
+    """Tipa registro a registro; fallos van a etl_parse_skips sin tumbar el lote."""
+    if not resource.has_typed_loader or not records:
+        return 0, 0
+
+    loaded = 0
+    skipped = 0
+    for record in records:
+        try:
+            count = transform_and_load(session, resource, [record], company_id)
+            loaded += count
+        except Exception as exc:
+            skipped += 1
+            alegra_id = _str_id(record.get("id"))
+            session.add(
+                EtlParseSkip(
+                    company_id=company_id,
+                    resource_name=resource.name,
+                    alegra_id=alegra_id,
+                    reason=str(exc)[:200],
+                    payload=record,
+                    run_id=run_id,
+                )
+            )
+            logger.warning(
+                "Skip tipado %s id=%s: %s",
+                resource.name,
+                alegra_id,
+                exc,
+            )
+    return loaded, skipped
 
 
 def _load_invoices(session: Session, records: list[dict[str, Any]], company_id: int) -> int:
@@ -242,11 +330,14 @@ def _load_payments_income(session: Session, records: list[dict[str, Any]], compa
         alegra_id = record.get("id")
         if alegra_id is None:
             continue
+        payment_date = _parse_date(record.get("date"))
+        if payment_date is None:
+            continue
         rows.append(
             {
                 "company_id": company_id,
                 "alegra_id": str(alegra_id),
-                "payment_date": record.get("date"),
+                "payment_date": payment_date,
                 "amount": record.get("amount"),
                 "payment_method": record.get("paymentMethod"),
                 "status": record.get("status"),
@@ -275,8 +366,13 @@ def soft_delete_typed_document(
         "invoices": FactSalesInvoice,
         "bills": FactPurchaseBill,
         "credit-notes": FactCreditNote,
+        "payments-income": FactIncomePayment,
         "items": DimItem,
         "contacts": DimContact,
+        "purchase-orders": FactPurchaseOrder,
+        "inventory-adjustments": FactInventoryAdjustment,
+        "warehouse-transfers": FactWarehouseTransfer,
+        "bank-accounts": FactBankAccount,
     }
     model = table_map.get(resource.name)
     if not model:
