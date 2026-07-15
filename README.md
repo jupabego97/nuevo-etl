@@ -102,11 +102,25 @@ Horario recomendado:
 
 ## Railway (referencia general)
 
-Configura en Alegra webhooks hacia:
+Configura en Alegra webhooks hacia (sin `https://` en la URL de suscripción):
 
 ```text
-POST https://<tu-servicio>.up.railway.app/webhooks/alegra
-Header: X-Webhook-Secret: <WEBHOOK_SECRET>
+<tu-servicio>.up.railway.app/webhooks/alegra?token=<WEBHOOK_SECRET>
+```
+
+Alegra **no envía headers custom**. El ETL acepta el secreto así:
+
+1. Query `?token=` o `?secret=` (recomendado para Alegra)
+2. Path `/webhooks/alegra/<WEBHOOK_SECRET>`
+3. Header `X-Webhook-Secret` (solo para pruebas con curl)
+
+Ejemplo de suscripción Alegra:
+
+```json
+{
+  "event": "new-invoice",
+  "url": "tu-servicio.up.railway.app/webhooks/alegra?token=TU_SECRETO"
+}
 ```
 
 Eventos soportados:

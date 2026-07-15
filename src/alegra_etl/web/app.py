@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from alegra_etl.config import get_settings
+from alegra_etl.config import Settings, get_settings
 from alegra_etl.db.session import session_scope
 from alegra_etl.logging import setup_logging
 from alegra_etl.pipeline.webhook_processor import WebhookProcessor
@@ -23,6 +24,39 @@ class WebhookPayload(BaseModel):
     data: dict[str, Any] | None = None
 
 
+def extract_presented_secret(
+    request: Request,
+    *,
+    path_token: str | None = None,
+    x_webhook_secret: str | None = None,
+) -> str | None:
+    """Obtiene el secreto presentado por Alegra o por un cliente de prueba.
+
+    Orden de prioridad:
+    1. Header ``X-Webhook-Secret`` (curl / clientes que sí soportan headers)
+    2. Query ``token`` o ``secret`` (Alegra solo permite URL sin https://)
+    3. Segmento de path ``/webhooks/alegra/{token}``
+    """
+    if x_webhook_secret and x_webhook_secret.strip():
+        return x_webhook_secret.strip()
+
+    for key in ("token", "secret"):
+        value = request.query_params.get(key)
+        if value and value.strip():
+            return value.strip()
+
+    if path_token and path_token.strip():
+        return path_token.strip()
+    return None
+
+
+def is_webhook_authorized(presented: str | None, settings: Settings) -> bool:
+    expected = settings.webhook_secret.get_secret_value()
+    if not expected or presented is None:
+        return False
+    return secrets.compare_digest(presented, expected)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     setup_logging(settings.log_level, settings.log_json)
@@ -32,12 +66,18 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.post("/webhooks/alegra")
-    async def receive_webhook(
+    async def _handle_webhook(
         request: Request,
-        x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
+        *,
+        path_token: str | None = None,
+        x_webhook_secret: str | None = None,
     ) -> dict[str, str]:
-        if x_webhook_secret != settings.webhook_secret.get_secret_value():
+        presented = extract_presented_secret(
+            request,
+            path_token=path_token,
+            x_webhook_secret=x_webhook_secret,
+        )
+        if not is_webhook_authorized(presented, settings):
             raise HTTPException(status_code=401, detail="Webhook no autorizado")
 
         body = await request.json()
@@ -52,6 +92,25 @@ def create_app() -> FastAPI:
 
         asyncio.create_task(_process_event_async(event_id))
         return {"status": "accepted", "event_id": event_id}
+
+    @app.post("/webhooks/alegra")
+    async def receive_webhook(
+        request: Request,
+        x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
+    ) -> dict[str, str]:
+        return await _handle_webhook(request, x_webhook_secret=x_webhook_secret)
+
+    @app.post("/webhooks/alegra/{path_token}")
+    async def receive_webhook_with_path_token(
+        path_token: str,
+        request: Request,
+        x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
+    ) -> dict[str, str]:
+        return await _handle_webhook(
+            request,
+            path_token=path_token,
+            x_webhook_secret=x_webhook_secret,
+        )
 
     return app
 
