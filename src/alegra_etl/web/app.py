@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from alegra_etl.config import Settings, get_settings
 from alegra_etl.db.session import session_scope
 from alegra_etl.logging import setup_logging
-from alegra_etl.pipeline.webhook_processor import WebhookProcessor
+from alegra_etl.pipeline.webhook_processor import WebhookProcessor, parse_alegra_webhook_body
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +81,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="Webhook no autorizado")
 
         body = await request.json()
-        event_type = body.get("event") or body.get("type") or "unknown"
-        payload = body.get("data") if isinstance(body.get("data"), dict) else body
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Body JSON inválido")
+        event_type, payload = parse_alegra_webhook_body(body)
 
         with session_scope(settings) as session:
             processor = WebhookProcessor(settings, session)
@@ -91,7 +92,7 @@ def create_app() -> FastAPI:
             event_id = str(event.id)
 
         asyncio.create_task(_process_event_async(event_id))
-        return {"status": "accepted", "event_id": event_id}
+        return {"status": "accepted", "event_id": event_id, "event": event_type}
 
     @app.post("/webhooks/alegra")
     async def receive_webhook(
