@@ -7,14 +7,13 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, or_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from alegra_etl.alegra.resources import ResourceDefinition, SyncStrategy, get_backfill_resources
 from alegra_etl.config import Settings
-from alegra_etl.db.models.backfill import BackfillWorkItem
 from alegra_etl.db.models import SyncCheckpoint
+from alegra_etl.db.models.backfill import BackfillWorkItem
 
 _BOGOTA = ZoneInfo("America/Bogota")
 LEASE_MINUTES = 15
@@ -58,9 +57,7 @@ def seed_work_items(
                     work_date=current,
                     status="pending",
                 )
-                .on_conflict_do_nothing(
-                    index_elements=["company_id", "resource_name", "work_key"]
-                )
+                .on_conflict_do_nothing(index_elements=["company_id", "resource_name", "work_key"])
             )
             result = session.execute(stmt)
             if result.rowcount and result.rowcount > 0:
@@ -98,7 +95,7 @@ def seed_all_pending_work(settings: Settings, session: Session) -> dict[str, int
             .filter_by(company_id=settings.company_id, resource_name=resource.name)
             .one_or_none()
         )
-        if checkpoint is None or checkpoint.status == "completed":
+        if checkpoint is None or checkpoint.status in {"completed", "skipped", "unsupported"}:
             continue
         if checkpoint.backfill_start_date is None:
             checkpoint.backfill_start_date = date.fromisoformat(settings.backfill_start_date)
@@ -161,16 +158,83 @@ def claim_work_items(
     return pending
 
 
-def mark_work_verified(item: BackfillWorkItem, metrics: dict[str, Any], run_id: uuid.UUID) -> None:
-    item.status = "verified"
-    item.verified_at = datetime.now(UTC)
+def mark_work_pending(
+    item: BackfillWorkItem,
+    metrics: dict[str, Any],
+    run_id: uuid.UUID,
+    *,
+    reason: str,
+) -> None:
+    """Conserva el progreso, pero nunca verifica una unidad incompleta."""
+    next_offset = int(metrics.get("next_offset", item.start_offset))
+    item.status = "pending"
+    item.start_offset = next_offset
+    item.confirmed_offset = next_offset
     item.records_extracted = int(metrics.get("extracted", 0))
     item.records_source = int(metrics.get("source_upserted", 0))
     item.records_typed = int(metrics.get("typed_upserted", 0))
     item.last_run_id = run_id
     item.lease_owner = None
     item.leased_until = None
+    item.verified_at = None
+    item.error_message = reason[:2000]
+    item.metadata_json = {
+        **(item.metadata_json or {}),
+        "last_result": {
+            "completed": bool(metrics.get("completed", 0)),
+            "next_offset": next_offset,
+            "skipped_typed": int(metrics.get("skipped_typed", 0)),
+        },
+    }
+
+
+def mark_work_verified(item: BackfillWorkItem, metrics: dict[str, Any], run_id: uuid.UUID) -> bool:
+    """Verifica solo una unidad completa, sin omisiones ni cuarentena."""
+    if not bool(metrics.get("completed", 0)):
+        mark_work_pending(item, metrics, run_id, reason="unidad_incompleta")
+        return False
+    skipped_typed = int(metrics.get("skipped_typed", 0))
+    if skipped_typed:
+        mark_work_pending(item, metrics, run_id, reason=f"registros_en_cuarentena:{skipped_typed}")
+        return False
+
+    item.status = "verified"
+    item.verified_at = datetime.now(UTC)
+    item.records_extracted = int(metrics.get("extracted", 0))
+    item.records_source = int(metrics.get("source_upserted", 0))
+    item.records_typed = int(metrics.get("typed_upserted", 0))
+    item.api_records = (
+        int(metrics["api_records"]) if metrics.get("api_records") is not None else None
+    )
+    item.api_distinct_ids = (
+        int(metrics["api_distinct_ids"]) if metrics.get("api_distinct_ids") is not None else None
+    )
+    item.source_distinct_ids = (
+        int(metrics["source_distinct_ids"])
+        if metrics.get("source_distinct_ids") is not None
+        else None
+    )
+    item.typed_distinct_ids = (
+        int(metrics["typed_distinct_ids"])
+        if metrics.get("typed_distinct_ids") is not None
+        else None
+    )
+    item.confirmed_offset = int(metrics.get("next_offset", 0))
+    item.last_run_id = run_id
+    item.lease_owner = None
+    item.leased_until = None
     item.error_message = None
+    item.metadata_json = {
+        **(item.metadata_json or {}),
+        "last_result": {
+            "completed": True,
+            "api_records": item.api_records,
+            "api_distinct_ids": item.api_distinct_ids,
+            "source_distinct_ids": item.source_distinct_ids,
+            "typed_distinct_ids": item.typed_distinct_ids,
+        },
+    }
+    return True
 
 
 def mark_work_failed(item: BackfillWorkItem, error: str) -> None:
@@ -180,7 +244,9 @@ def mark_work_failed(item: BackfillWorkItem, error: str) -> None:
     item.leased_until = None
 
 
-def work_progress(session: Session, company_id: int, resource_name: str | None = None) -> dict[str, Any]:
+def work_progress(
+    session: Session, company_id: int, resource_name: str | None = None
+) -> dict[str, Any]:
     query = session.query(BackfillWorkItem).filter(BackfillWorkItem.company_id == company_id)
     if resource_name:
         query = query.filter(BackfillWorkItem.resource_name == resource_name)
@@ -197,13 +263,23 @@ def work_progress(session: Session, company_id: int, resource_name: str | None =
 
 
 def all_work_verified(session: Session, company_id: int, resource_name: str) -> bool:
-    pending = (
+    total = (
         session.query(BackfillWorkItem)
         .filter(
             BackfillWorkItem.company_id == company_id,
             BackfillWorkItem.resource_name == resource_name,
-            BackfillWorkItem.status.in_(("pending", "running", "failed")),
         )
         .count()
     )
-    return pending == 0
+    invalid = (
+        session.query(BackfillWorkItem)
+        .filter(
+            BackfillWorkItem.company_id == company_id,
+            BackfillWorkItem.resource_name == resource_name,
+            (BackfillWorkItem.status != "verified")
+            | BackfillWorkItem.verified_at.is_(None)
+            | BackfillWorkItem.error_message.is_not(None),
+        )
+        .count()
+    )
+    return total > 0 and invalid == 0

@@ -5,8 +5,6 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from typing import Any
-
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
@@ -15,11 +13,14 @@ from alegra_etl.db.models import (
     EtlParseSkip,
     FactIncomePayment,
     FactSalesInvoice,
-    FactSalesInvoiceLine,
     QualityCheckResult,
     SourceDocument,
 )
-from alegra_etl.pipeline.resource_coverage import RESOURCE_TYPED_MAP, count_source_ids, count_typed_ids
+from alegra_etl.pipeline.resource_coverage import (
+    RESOURCE_TYPED_MAP,
+    count_source_ids,
+    count_typed_ids,
+)
 
 
 def run_quality_checks(session: Session, run_id: uuid.UUID, company_id: int) -> dict[str, Any]:
@@ -76,11 +77,14 @@ def _check_orphan_invoice_lines(session: Session, company_id: int) -> dict[str, 
 
 
 def _check_void_invoices(session: Session, company_id: int) -> dict[str, Any]:
-    void_count = session.scalar(
-        select(func.count())
-        .select_from(FactSalesInvoice)
-        .where(FactSalesInvoice.company_id == company_id, FactSalesInvoice.status == "void")
-    ) or 0
+    void_count = (
+        session.scalar(
+            select(func.count())
+            .select_from(FactSalesInvoice)
+            .where(FactSalesInvoice.company_id == company_id, FactSalesInvoice.status == "void")
+        )
+        or 0
+    )
     return {"status": "pass", "void_count": void_count}
 
 
@@ -115,21 +119,27 @@ def _check_parse_skips(session: Session, company_id: int) -> dict[str, Any]:
 
 def _check_payment_records(session: Session, company_id: int) -> dict[str, Any]:
     """Pagos de ingreso deben existir solo en fact_income_payment."""
-    count = session.scalar(
-        select(func.count())
-        .select_from(FactIncomePayment)
-        .where(FactIncomePayment.company_id == company_id)
-    ) or 0
-    source_payments = session.scalar(
-        select(func.count(func.distinct(SourceDocument.alegra_id))).where(
-            SourceDocument.company_id == company_id,
-            SourceDocument.resource_name == "payments-income",
-            SourceDocument.deleted_at.is_(None),
+    count = (
+        session.scalar(
+            select(func.count())
+            .select_from(FactIncomePayment)
+            .where(FactIncomePayment.company_id == company_id)
         )
-    ) or 0
+        or 0
+    )
+    source_payments = (
+        session.scalar(
+            select(func.count(func.distinct(SourceDocument.alegra_id))).where(
+                SourceDocument.company_id == company_id,
+                SourceDocument.resource_name == "payments-income",
+                SourceDocument.deleted_at.is_(None),
+            )
+        )
+        or 0
+    )
     aligned = count == source_payments
     return {
-        "status": "pass" if aligned or count == 0 else "warn",
+        "status": "pass" if aligned else "fail",
         "typed": count,
         "source": source_payments,
     }
@@ -147,7 +157,11 @@ def backfill_coverage_manifest(session: Session, company_id: int, settings: Any)
     manifest: dict[str, Any] = {}
     for resource in get_backfill_resources(settings):
         source = count_source_ids(session, company_id, resource.name)
-        typed = count_typed_ids(session, company_id, resource.name) if resource.has_typed_loader else None
+        typed = (
+            count_typed_ids(session, company_id, resource.name)
+            if resource.has_typed_loader
+            else None
+        )
         manifest[resource.name] = {
             "source_only": resource.source_only,
             "has_typed_loader": resource.has_typed_loader,

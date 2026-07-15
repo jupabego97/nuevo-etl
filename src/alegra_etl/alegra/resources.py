@@ -49,6 +49,7 @@ class ResourceDefinition:
     supports_pagination: bool = True
     supports_date_filter: bool = False
     supports_metadata: bool = True
+    fallback_remove_params: tuple[str, ...] = ()
     has_typed_loader: bool = False
     source_only: bool = False
     parser: str | None = None
@@ -461,19 +462,11 @@ def get_enabled_resources(settings: Any) -> list[ResourceDefinition]:
 
 
 def get_daily_sync_resources(settings: Any) -> list[ResourceDefinition]:
-    return [
-        r
-        for r in get_enabled_resources(settings)
-        if r.include_in_daily_sync
-    ]
+    return [r for r in get_enabled_resources(settings) if r.include_in_daily_sync]
 
 
 def get_weekly_refresh_resources(settings: Any) -> list[ResourceDefinition]:
-    return [
-        r
-        for r in get_enabled_resources(settings)
-        if r.include_in_weekly_refresh
-    ]
+    return [r for r in get_enabled_resources(settings) if r.include_in_weekly_refresh]
 
 
 def get_backfill_resources(settings: Any) -> list[ResourceDefinition]:
@@ -483,11 +476,7 @@ def get_backfill_resources(settings: Any) -> list[ResourceDefinition]:
         ResourcePriority.MEDIUM: 2,
         ResourcePriority.LOW: 3,
     }
-    resources = [
-        r
-        for r in get_enabled_resources(settings)
-        if r.include_in_backfill
-    ]
+    resources = [r for r in get_enabled_resources(settings) if r.include_in_backfill]
     return sorted(resources, key=lambda r: (priority_order[r.priority], r.name))
 
 
@@ -513,7 +502,11 @@ def validate_resource_coverage() -> list[str]:
             continue
         if resource.has_typed_loader and resource.source_only:
             issues.append(f"{resource.name}: typed y source_only simultáneo")
-        if not resource.has_typed_loader and not resource.source_only and resource.include_in_backfill:
-            if not resource.optional:
-                issues.append(f"{resource.name}: sin loader ni source_only")
+        if (
+            not resource.has_typed_loader
+            and not resource.source_only
+            and resource.include_in_backfill
+            and not resource.optional
+        ):
+            issues.append(f"{resource.name}: sin loader ni source_only")
     return issues

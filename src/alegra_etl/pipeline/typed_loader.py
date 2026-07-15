@@ -212,7 +212,12 @@ def transform_and_load_resilient(
     skipped = 0
     for record in records:
         try:
-            count = transform_and_load(session, resource, [record], company_id)
+            # El documento source ya fue guardado fuera de este savepoint.
+            # Un error SQL de un registro no invalida la página completa.
+            with session.begin_nested():
+                count = transform_and_load(session, resource, [record], company_id)
+                if count == 0:
+                    raise ValueError("parser_no_output")
             loaded += count
         except Exception as exc:
             skipped += 1

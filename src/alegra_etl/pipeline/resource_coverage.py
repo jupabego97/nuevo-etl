@@ -99,3 +99,44 @@ def count_typed_ids(
         date_col = getattr(model, mapping.date_column)
         query = query.where(date_col >= start_date, date_col <= end_date)
     return session.scalar(query) or 0
+
+
+def source_ids(
+    session: Session,
+    company_id: int,
+    resource_name: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> set[str]:
+    query = select(SourceDocument.alegra_id).where(
+        SourceDocument.company_id == company_id,
+        SourceDocument.resource_name == resource_name,
+        SourceDocument.deleted_at.is_(None),
+    )
+    if start_date and end_date:
+        query = query.where(
+            SourceDocument.document_date >= start_date,
+            SourceDocument.document_date <= end_date,
+        )
+    return {str(value) for value in session.execute(query).scalars().all()}
+
+
+def typed_ids(
+    session: Session,
+    company_id: int,
+    resource_name: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> set[str]:
+    mapping = RESOURCE_TYPED_MAP.get(resource_name)
+    if not mapping:
+        return set()
+    model = mapping.model
+    query = select(getattr(model, mapping.id_column)).where(
+        model.company_id == company_id,
+        model.deleted_at.is_(None),
+    )
+    if start_date and end_date and mapping.date_column:
+        date_col = getattr(model, mapping.date_column)
+        query = query.where(date_col >= start_date, date_col <= end_date)
+    return {str(value) for value in session.execute(query).scalars().all()}

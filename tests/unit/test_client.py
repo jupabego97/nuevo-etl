@@ -61,3 +61,22 @@ async def test_client_raises_on_403(settings, httpx_mock):
         with pytest.raises(AlegraClientError) as exc:
             await client.get_page("global-invoices")
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_by_date_preserves_business_filters_on_fallback(settings, httpx_mock):
+    httpx_mock.add_response(method="GET", status_code=400, json={"message": "unsupported option"})
+    httpx_mock.add_response(method="GET", json={"data": [{"id": "1"}]})
+
+    async with AlegraClient(settings) as client:
+        records = await client.get_by_date(
+            "payments",
+            "2022-01-01",
+            extra_params={"type": "in"},
+        )
+
+    assert [record["id"] for record in records] == ["1"]
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 2
+    assert requests[1].url.params["type"] == "in"
+    assert requests[1].url.params["date"] == "2022-01-01"

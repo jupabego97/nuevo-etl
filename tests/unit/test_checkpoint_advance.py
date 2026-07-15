@@ -212,7 +212,8 @@ def test_does_not_reopen_true_historical_completed(monkeypatch):
             __import__("datetime").UTC
         ),
         verified_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
-        metadata_json={},
+        backfill_generation=1,
+        metadata_json={"reconciliation_verified_generation": 1},
     )
     manager._maybe_reopen_false_completed(checkpoint, resource, date(2026, 7, 12))
     assert checkpoint.status == "completed"

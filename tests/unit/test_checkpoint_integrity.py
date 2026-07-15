@@ -1,8 +1,6 @@
 """Pruebas de integridad de checkpoints legacy."""
 
-from datetime import date, datetime, UTC
-
-import pytest
+from datetime import UTC, date, datetime
 
 from alegra_etl.alegra.resources import resource_by_name
 from alegra_etl.pipeline.checkpoint_integrity import (
@@ -66,6 +64,8 @@ def test_valid_completed_checkpoint_passes():
         backfill_completed_at=datetime.now(UTC),
         verified_at=datetime.now(UTC),
         cursor_offset=0,
+        backfill_generation=1,
+        metadata_json={"reconciliation_verified_generation": 1},
     )
     assert checkpoint_issues(cp, resource) == []
     assert is_truly_complete(cp, resource)

@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from alegra_etl.alegra.resources import resource_by_name
 from alegra_etl.pipeline.typed_loader import transform_and_load_resilient
 

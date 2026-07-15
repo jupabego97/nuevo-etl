@@ -1,5 +1,6 @@
 """Paginación sin metadata confiable."""
 
+import httpx
 import pytest
 
 from alegra_etl.alegra.client import AlegraClient
@@ -53,3 +54,33 @@ async def test_no_metadata_short_page_completes(settings, httpx_mock):
 
     assert result.completed is True
     assert result.next_offset == 0
+
+
+@pytest.mark.asyncio
+async def test_intermediate_empty_page_blocks_later_pages(settings, httpx_mock):
+    async def response_for_offset(request: httpx.Request) -> httpx.Response:
+        offset = int(request.url.params["start"])
+        pages = {
+            0: [{"id": str(i)} for i in range(30)],
+            30: [],
+            60: [{"id": "60"}],
+        }
+        return httpx.Response(
+            200,
+            json={"data": pages[offset], "metadata": {"total": 90}},
+        )
+
+    httpx_mock.add_callback(response_for_offset, method="GET", is_reusable=True)
+
+    async with AlegraClient(settings) as client:
+        result = await fetch_page_batch(
+            client,
+            "invoices",
+            start_offset=0,
+            max_pages=3,
+        )
+
+    assert result.intermediate_gap is True
+    assert result.completed is False
+    assert result.next_offset == 30
+    assert result.pages_fetched == 1

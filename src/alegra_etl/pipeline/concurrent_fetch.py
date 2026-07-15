@@ -22,6 +22,53 @@ class PageBatchResult:
     completed: bool
     next_offset: int
     total_known: int | None = None
+    intermediate_gap: bool = False
+    requested_pages: int = 0
+    confirmed_pages: int = 0
+    first_id: str | None = None
+    last_id: str | None = None
+
+
+def _contiguous_prefix(
+    results: list[tuple[int, list[dict[str, Any]], dict[str, Any] | None]],
+    *,
+    start_offset: int,
+    page_size: int,
+    total: int | None,
+) -> tuple[list[tuple[int, list[dict[str, Any]], dict[str, Any] | None]], bool]:
+    """Descarta páginas posteriores a un hueco para no saltar registros."""
+    by_offset = {offset: (offset, page, meta) for offset, page, meta in results}
+    accepted: list[tuple[int, list[dict[str, Any]], dict[str, Any] | None]] = []
+    expected = start_offset
+    for offset in sorted(by_offset):
+        if offset != expected:
+            return accepted, True
+        _, page, _ = by_offset[offset]
+        if not page:
+            has_later_records = any(
+                later_offset > offset and later_page for later_offset, later_page, _ in results
+            )
+            return accepted, has_later_records
+        accepted.append(by_offset[offset])
+        expected = offset + page_size
+        if total is None and len(page) < page_size:
+            has_later_records = any(
+                later_offset > offset and later_page for later_offset, later_page, _ in results
+            )
+            return accepted, has_later_records
+    return accepted, False
+
+
+def _page_extremes(
+    results: list[tuple[int, list[dict[str, Any]], dict[str, Any] | None]],
+) -> tuple[str | None, str | None]:
+    ids = [
+        str(record.get("id"))
+        for _, page, _ in results
+        for record in page
+        if record.get("id") is not None
+    ]
+    return (ids[0], ids[-1]) if ids else (None, None)
 
 
 def _compute_next_offset(
@@ -62,10 +109,7 @@ def _is_batch_complete(
         return True
 
     _, last_page = max(non_empty, key=lambda x: x[0])
-    if len(last_page) < page_size:
-        return True
-
-    return False
+    return len(last_page) < page_size
 
 
 async def fetch_page_batch(
@@ -79,6 +123,7 @@ async def fetch_page_batch(
     max_pages: int = 5,
     on_page: PageCallback | None = None,
     allow_parallel: bool = True,
+    supports_metadata: bool = True,
 ) -> PageBatchResult:
     """Descarga un lote de páginas; persistencia del callback sigue serial."""
     params = dict(extra_params or {})
@@ -89,9 +134,11 @@ async def fetch_page_batch(
 
     page_size = client.settings.sync_page_size
     total: int | None = None
-    if client.settings.backfill_require_metadata:
+    if supports_metadata and client.settings.backfill_require_metadata:
         try:
-            total = await client.get_total_count(endpoint, extra_params=params if use_order else extra_params)
+            total = await client.get_total_count(
+                endpoint, extra_params=params if use_order else extra_params
+            )
         except AlegraClientError:
             total = None
 
@@ -110,6 +157,7 @@ async def fetch_page_batch(
             completed=True,
             next_offset=start_offset,
             total_known=total,
+            requested_pages=0,
         )
 
     if not allow_parallel or len(offsets) == 1:
@@ -124,7 +172,9 @@ async def fetch_page_batch(
     else:
         semaphore = asyncio.Semaphore(client.settings.sync_max_concurrent)
 
-        async def _fetch_one(offset: int) -> tuple[int, list[dict[str, Any]], dict[str, Any] | None]:
+        async def _fetch_one(
+            offset: int,
+        ) -> tuple[int, list[dict[str, Any]], dict[str, Any] | None]:
             async with semaphore:
                 return await _fetch_one_page(client, endpoint, offset, page_size, params, use_order)
 
@@ -132,29 +182,38 @@ async def fetch_page_batch(
         results = await asyncio.gather(*tasks)
         results.sort(key=lambda item: item[0])
 
+    if supports_metadata and total is None:
+        for _, _, meta in results:
+            if meta and "total" in meta:
+                total = int(meta["total"])
+                break
+    accepted_results, intermediate_gap = _contiguous_prefix(
+        results,
+        start_offset=start_offset,
+        page_size=page_size,
+        total=total,
+    )
     pages_fetched = 0
     records_extracted = 0
-    last_meta: dict[str, Any] | None = None
-    for offset, page, meta in results:
+    for offset, page, meta in accepted_results:
         if not page:
             continue
         pages_fetched += 1
         records_extracted += len(page)
-        last_meta = meta
         if on_page:
             await on_page(offset, page, meta)
 
-    if last_meta and "total" in last_meta and total is None:
-        total = int(last_meta["total"])
-
-    next_offset = _compute_next_offset(results, page_size, start_offset)
+    next_offset = _compute_next_offset(accepted_results, page_size, start_offset)
     completed = _is_batch_complete(
-        results,
+        accepted_results,
         requested_offsets=offsets,
         page_size=page_size,
         total=total,
         start_offset=start_offset,
     )
+    if intermediate_gap:
+        completed = False
+    first_id, last_id = _page_extremes(accepted_results)
 
     return PageBatchResult(
         pages_fetched=pages_fetched,
@@ -162,6 +221,11 @@ async def fetch_page_batch(
         completed=completed,
         next_offset=next_offset if not completed else 0,
         total_known=total,
+        intermediate_gap=intermediate_gap,
+        requested_pages=len(offsets),
+        confirmed_pages=pages_fetched,
+        first_id=first_id,
+        last_id=last_id,
     )
 
 
@@ -202,9 +266,11 @@ async def fetch_date_page_batch(
     target_date: str,
     *,
     extra_params: dict[str, Any] | None = None,
+    fallback_remove_params: tuple[str, ...] = (),
     start_offset: int = 0,
     max_pages: int = 5,
     on_page: PageCallback | None = None,
+    supports_metadata: bool = True,
 ) -> PageBatchResult:
     """Paginación concurrente para un día concreto."""
     params = dict(extra_params or {})
@@ -212,10 +278,11 @@ async def fetch_date_page_batch(
     page_size = client.settings.sync_page_size
 
     total: int | None = None
-    try:
-        total = await client.get_total_count(endpoint, extra_params=params)
-    except AlegraClientError:
-        total = None
+    if supports_metadata:
+        try:
+            total = await client.get_total_count(endpoint, extra_params=params)
+        except AlegraClientError:
+            total = None
 
     offsets: list[int] = []
     current = start_offset
@@ -242,9 +309,9 @@ async def fetch_date_page_batch(
             except AlegraClientError as exc:
                 # Solo en offset 0 reintentar sin params extra (no quitar type=...)
                 if exc.status_code == 400 and offset == 0 and len(params) > 1:
-                    minimal = {"date": target_date}
-                    if "type" in params:
-                        minimal["type"] = params["type"]
+                    minimal = dict(params)
+                    for key in fallback_remove_params:
+                        minimal.pop(key, None)
                     page, meta = await client.get_page(
                         endpoint,
                         start=0,
@@ -259,26 +326,38 @@ async def fetch_date_page_batch(
     results = await asyncio.gather(*tasks)
     results.sort(key=lambda item: item[0])
 
+    if supports_metadata and total is None:
+        for _, _, meta in results:
+            if meta and "total" in meta:
+                total = int(meta["total"])
+                break
+    accepted_results, intermediate_gap = _contiguous_prefix(
+        results,
+        start_offset=start_offset,
+        page_size=page_size,
+        total=total,
+    )
     pages_fetched = 0
     records_extracted = 0
-    for offset, page, meta in results:
+    for offset, page, meta in accepted_results:
         if not page:
             continue
         pages_fetched += 1
         records_extracted += len(page)
-        if meta and "total" in meta and total is None:
-            total = int(meta["total"])
         if on_page:
             await on_page(offset, page, meta)
 
-    next_offset = _compute_next_offset(results, page_size, start_offset)
+    next_offset = _compute_next_offset(accepted_results, page_size, start_offset)
     completed = _is_batch_complete(
-        results,
+        accepted_results,
         requested_offsets=offsets,
         page_size=page_size,
         total=total,
         start_offset=start_offset,
     )
+    if intermediate_gap:
+        completed = False
+    first_id, last_id = _page_extremes(accepted_results)
 
     return PageBatchResult(
         pages_fetched=pages_fetched,
@@ -286,4 +365,9 @@ async def fetch_date_page_batch(
         completed=completed,
         next_offset=next_offset if not completed else 0,
         total_known=total,
+        intermediate_gap=intermediate_gap,
+        requested_pages=len(offsets),
+        confirmed_pages=pages_fetched,
+        first_id=first_id,
+        last_id=last_id,
     )

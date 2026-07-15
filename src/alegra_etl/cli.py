@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import traceback
+from typing import Any
 
 import typer
 import uvicorn
@@ -112,9 +113,7 @@ def backfill_status() -> None:
         from alegra_etl.pipeline.completion_gate import global_backfill_status
 
         resources = {r.name: r for r in get_backfill_resources(settings)}
-        checkpoints = (
-            session.query(SyncCheckpoint).filter_by(company_id=settings.company_id).all()
-        )
+        checkpoints = session.query(SyncCheckpoint).filter_by(company_id=settings.company_id).all()
         status = global_backfill_status(session, settings, resources, checkpoints)
         progress = work_progress(session, settings.company_id)
         typer.echo(
@@ -140,8 +139,10 @@ def backfill_workers(
 
         with session_scope(settings) as session:
             runner = BackfillWorkerRunner(settings, session)
-            result = await runner.run_batch(resource_name=resource)
+            result = await runner.run_until_idle(resource_name=resource)
             typer.echo(str(result))
+            if result.get("status") == "blocked":
+                raise typer.Exit(code=2)
 
     asyncio.run(_run())
 
@@ -180,6 +181,7 @@ def backfill_recover() -> None:
     _run_migrations()
 
     async def _run() -> None:
+        from alegra_etl.alegra.resources import get_backfill_resources
         from alegra_etl.pipeline.backfill_worker import BackfillWorkerRunner
         from alegra_etl.pipeline.checkpoint_integrity import audit_checkpoints, repair_all_invalid
         from alegra_etl.pipeline.reconciler import Reconciler
@@ -193,20 +195,27 @@ def backfill_recover() -> None:
 
         with session_scope(settings) as session:
             worker = BackfillWorkerRunner(settings, session)
-            steps["workers"] = await worker.run_batch()
+            steps["workers"] = await worker.run_until_idle()
+            if steps["workers"].get("status") != "complete":
+                raise RuntimeError(f"Backfill bloqueado: {steps['workers']}")
 
         with session_scope(settings) as session:
             reconciler = Reconciler(settings, session)
-            for resource_name in ("invoices", "payments-income", "credit-notes", "bills"):
+            for resource in get_backfill_resources(settings):
+                resource_name = resource.name
                 steps[f"reconcile_{resource_name}"] = await reconciler.reconcile_checkpoint(
                     resource_name
+                )
+            final_audit = audit_checkpoints(settings, session)
+            if not final_audit["all_backfill_complete"]:
+                raise RuntimeError(
+                    f"Reconciliación incompleta; marts no regenerados: "
+                    f"{final_audit.get('blockers_by_resource', {})}"
                 )
             session.commit()
             builder = MartBuilder(settings, session)
             steps["marts"] = builder.build_all()
-            steps["manifest"] = backfill_coverage_manifest(
-                session, settings.company_id, settings
-            )
+            steps["manifest"] = backfill_coverage_manifest(session, settings.company_id, settings)
             steps["audit_after"] = audit_checkpoints(settings, session)
 
         typer.echo(json.dumps(steps, indent=2, default=str))

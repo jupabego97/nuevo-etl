@@ -34,7 +34,9 @@ class AlegraClientError(Exception):
 class AlegraClient:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.rate_limiter = RateLimiter(max_requests_per_minute=settings.alegra_max_requests_per_minute)
+        self.rate_limiter = RateLimiter(
+            max_requests_per_minute=settings.alegra_max_requests_per_minute
+        )
         self._client = httpx.AsyncClient(
             base_url=settings.alegra_base_url.rstrip("/"),
             headers={
@@ -64,13 +66,19 @@ class AlegraClient:
         wait=wait_exponential_jitter(initial=1, max=60),
         reraise=True,
     )
-    async def _request(self, method: str, endpoint: str, params: dict[str, Any] | None = None) -> httpx.Response:
+    async def _request(
+        self, method: str, endpoint: str, params: dict[str, Any] | None = None
+    ) -> httpx.Response:
         await self.rate_limiter.acquire()
         response = await self._client.request(method, endpoint.lstrip("/"), params=params)
         self.rate_limiter.update_from_headers(
             response.headers.get("X-Rate-Limit-Remaining"),
             response.headers.get("X-Rate-Limit-Reset"),
         )
+        if response.status_code == 429:
+            self.rate_limiter.penalize()
+        else:
+            self.rate_limiter.reward()
         if response.status_code in RECOVERABLE_STATUS:
             raise AlegraClientError(
                 f"Error recuperable {response.status_code} en {endpoint}",
@@ -210,6 +218,7 @@ class AlegraClient:
         endpoint: str,
         target_date: str,
         extra_params: dict[str, Any] | None = None,
+        fallback_remove_params: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         params = dict(extra_params or {})
         params["date"] = target_date
@@ -227,15 +236,18 @@ class AlegraClient:
                 )
             except AlegraClientError as exc:
                 if exc.status_code == 400 and start == 0:
+                    fallback_params = dict(params)
+                    for key in fallback_remove_params:
+                        fallback_params.pop(key, None)
                     page, meta = await self.get_page(
                         endpoint,
                         start=0,
                         limit=page_size,
-                        extra_params={"date": target_date},
+                        extra_params=fallback_params,
                     )
-                    records.extend(page)
-                    break
-                raise
+                    params = fallback_params
+                else:
+                    raise
             if not page:
                 break
             records.extend(page)
@@ -246,12 +258,10 @@ class AlegraClient:
                 break
             start += page_size
         else:
-            logger.warning(
-                "Tope de paginación en %s date=%s (%s páginas); se continúa con %s registros",
-                endpoint,
-                target_date,
-                max_pages,
-                len(records),
+            raise AlegraClientError(
+                f"Tope de paginación en {endpoint} date={target_date} "
+                f"({max_pages} páginas); rango no verificable",
+                status_code=None,
             )
         return records
 

@@ -39,11 +39,16 @@ def checkpoint_issues(
     issues: list[str] = []
     today = today or _today_local()
 
-    if checkpoint.status == "skipped":
+    if checkpoint.status in {"skipped", "unsupported"}:
         return issues
 
     if checkpoint.status != "completed":
         return issues
+
+    metadata = checkpoint.metadata_json or {}
+    generation = getattr(checkpoint, "backfill_generation", 1)
+    if metadata.get("reconciliation_verified_generation") != generation:
+        issues.append("not_reconciled")
 
     if resource is None:
         issues.append("unknown_resource")
@@ -56,21 +61,22 @@ def checkpoint_issues(
             issues.append("missing_backfill_end_date")
         if checkpoint.cursor_date is None:
             issues.append("missing_cursor_date")
-        elif checkpoint.backfill_end_date and checkpoint.cursor_date <= checkpoint.backfill_end_date:
-            issues.append("cursor_not_past_end")
-        elif checkpoint.backfill_end_date is None and checkpoint.cursor_date is not None:
+        elif (
+            checkpoint.backfill_end_date is None
+            or checkpoint.cursor_date <= checkpoint.backfill_end_date
+        ):
             issues.append("cursor_not_past_end")
         if checkpoint.backfill_completed_at is None:
             issues.append("missing_backfill_completed_at")
         if getattr(checkpoint, "verified_at", None) is None and resource.name in CRITICAL_RESOURCES:
             issues.append("not_verified")
 
-    if resource.strategy == SyncStrategy.FULL:
-        if checkpoint.backfill_completed_at is None and resource.priority in {
-            ResourcePriority.CRITICAL,
-            ResourcePriority.HIGH,
-        }:
-            issues.append("full_missing_completed_at")
+    if (
+        resource.strategy == SyncStrategy.FULL
+        and checkpoint.backfill_completed_at is None
+        and resource.priority in {ResourcePriority.CRITICAL, ResourcePriority.HIGH}
+    ):
+        issues.append("full_missing_completed_at")
 
     return issues
 
@@ -81,11 +87,15 @@ def is_truly_complete(
     *,
     today: date | None = None,
 ) -> bool:
-    return checkpoint.status == "completed" and not checkpoint_issues(checkpoint, resource, today=today)
+    return checkpoint.status == "completed" and not checkpoint_issues(
+        checkpoint, resource, today=today
+    )
 
 
 def audit_checkpoints(settings: Settings, session: Session) -> dict[str, Any]:
     """Diagnóstico de todos los checkpoints de backfill."""
+    from alegra_etl.pipeline.completion_gate import can_mark_backfill_completed
+
     resources = {r.name: r for r in get_backfill_resources(settings)}
     rows = (
         session.query(SyncCheckpoint)
@@ -108,12 +118,20 @@ def audit_checkpoints(settings: Settings, session: Session) -> dict[str, Any]:
             "status": row.status,
             "cursor_date": row.cursor_date.isoformat() if row.cursor_date else None,
             "cursor_offset": row.cursor_offset,
-            "backfill_start_date": row.backfill_start_date.isoformat() if row.backfill_start_date else None,
-            "backfill_end_date": row.backfill_end_date.isoformat() if row.backfill_end_date else None,
-            "backfill_completed_at": row.backfill_completed_at.isoformat() if row.backfill_completed_at else None,
+            "backfill_start_date": row.backfill_start_date.isoformat()
+            if row.backfill_start_date
+            else None,
+            "backfill_end_date": row.backfill_end_date.isoformat()
+            if row.backfill_end_date
+            else None,
+            "backfill_completed_at": row.backfill_completed_at.isoformat()
+            if row.backfill_completed_at
+            else None,
             "verified_at": row.verified_at.isoformat() if row.verified_at else None,
             "issues": issues,
-            "truly_complete": is_truly_complete(row, resource) if resource else False,
+            "truly_complete": (
+                can_mark_backfill_completed(session, settings, row, resource) if resource else False
+            ),
         }
         report["resources"][row.resource_name] = entry
         if row.status == "pending":
@@ -155,20 +173,28 @@ def repair_checkpoint(
 
     checkpoint.status = "pending"
     checkpoint.backfill_start_date = checkpoint.backfill_start_date or backfill_start
-    checkpoint.backfill_end_date = today
+    if checkpoint.backfill_end_date is None:
+        checkpoint.backfill_end_date = today
     if resource.strategy == SyncStrategy.DATE_WINDOW:
-        checkpoint.cursor_date = checkpoint.cursor_date or checkpoint.backfill_start_date or backfill_start
+        checkpoint.cursor_date = (
+            checkpoint.cursor_date or checkpoint.backfill_start_date or backfill_start
+        )
         if "cursor_not_past_end" in issues or "missing_cursor_date" in issues:
             checkpoint.cursor_date = checkpoint.backfill_start_date or backfill_start
     checkpoint.cursor_offset = 0
     checkpoint.backfill_completed_at = None
     checkpoint.verified_at = None
     checkpoint.backfill_generation = (checkpoint.backfill_generation or 1) + 1
+    meta.pop("reconciliation_verified_at", None)
+    meta.pop("reconciliation_verified_generation", None)
+    meta.pop("reconciliation_resource", None)
     checkpoint.metadata_json = meta
     return True
 
 
-def repair_all_invalid(settings: Settings, session: Session, *, apply: bool = False) -> dict[str, Any]:
+def repair_all_invalid(
+    settings: Settings, session: Session, *, apply: bool = False
+) -> dict[str, Any]:
     """Audita y opcionalmente repara checkpoints inválidos."""
     resources = {r.name: r for r in get_backfill_resources(settings)}
     rows = session.query(SyncCheckpoint).filter_by(company_id=settings.company_id).all()
@@ -195,5 +221,8 @@ def repair_all_invalid(settings: Settings, session: Session, *, apply: bool = Fa
         "skipped_unknown": skipped,
     }
     if apply:
+        from alegra_etl.pipeline.backfill_work import seed_all_pending_work
+
+        result["seeded_work_items"] = seed_all_pending_work(settings, session)
         session.flush()
     return result

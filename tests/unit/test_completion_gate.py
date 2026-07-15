@@ -1,6 +1,6 @@
 """Pruebas del gate de completitud de backfill."""
 
-from datetime import date, datetime, UTC
+from datetime import UTC, date, datetime
 from unittest.mock import MagicMock
 
 from alegra_etl.alegra.resources import resource_by_name

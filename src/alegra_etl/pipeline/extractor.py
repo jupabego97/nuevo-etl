@@ -148,6 +148,7 @@ class ResourceExtractor:
                 max_pages=pages_per_batch,
                 on_page=on_page,
                 allow_parallel=bool(resource.order_field),
+                supports_metadata=resource.supports_metadata,
             )
             offset = result.next_offset
             if result.completed or max_pages is not None:
@@ -219,9 +220,11 @@ class ResourceExtractor:
                     resource.endpoint,
                     day.isoformat(),
                     extra_params=resource.extra_params,
+                    fallback_remove_params=resource.fallback_remove_params,
                     start_offset=offset,
                     max_pages=min(self.settings.backfill_pages_per_step, pages_limit - pages_this_day),
                     on_page=on_page,
+                    supports_metadata=resource.supports_metadata,
                 )
                 offset = batch_result.next_offset
                 if batch_result.completed or batch_result.pages_fetched == 0:

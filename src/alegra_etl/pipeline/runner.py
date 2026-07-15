@@ -85,8 +85,8 @@ class PipelineRunner:
                 except AlegraClientError as exc:
                     if self._should_skip_error(resource, exc):
                         self._finish_stage(stage, "skipped", {"reason": str(exc)})
-                        self.checkpoints.mark_skipped(checkpoint, str(exc))
-                        metrics["resources"][resource.name] = {"status": "skipped"}
+                        self.checkpoints.mark_unsupported(checkpoint, str(exc))
+                        metrics["resources"][resource.name] = {"status": "unsupported"}
                         self.session.commit()
                     else:
                         self.checkpoints.mark_failed(checkpoint, str(exc))
@@ -133,16 +133,17 @@ class PipelineRunner:
 
         for resource in get_backfill_resources(self.settings):
             cp = self.checkpoints.get_or_create(resource)
-            if cp.status not in {"completed", "skipped"}:
+            if cp.status not in {"completed", "skipped", "unsupported"}:
                 target = resource
                 checkpoint = cp
                 break
 
         if not target or not checkpoint:
-            self._finish_run(run, "success", {"status": "all_completed", **status})
+            result_status = "all_completed" if status["all_backfill_complete"] else "blocked"
+            self._finish_run(run, "success", {"status": result_status, **status})
             self.session.commit()
-            print("[backfill-step] Sin trabajo pendiente", flush=True)
-            return {"status": "all_completed", "run_id": str(run.id), **status}
+            print(f"[backfill-step] Sin trabajo pendiente; estado={result_status}", flush=True)
+            return {"status": result_status, "run_id": str(run.id), **status}
 
         if not try_acquire_backfill_lock(self.session, self.settings.company_id, target.name):
             self._finish_run(run, "success", {"status": "locked", "resource": target.name})
@@ -189,10 +190,10 @@ class PipelineRunner:
                 except AlegraClientError as exc:
                     if self._should_skip_error(target, exc):
                         self._finish_stage(stage, "skipped", {"reason": str(exc)})
-                        self.checkpoints.mark_skipped(checkpoint, str(exc))
-                        self._finish_run(run, "success", {"resource": target.name, "status": "skipped"})
+                        self.checkpoints.mark_unsupported(checkpoint, str(exc))
+                        self._finish_run(run, "success", {"resource": target.name, "status": "unsupported"})
                         self.session.commit()
-                        return {"resource": target.name, "status": "skipped", "reason": str(exc)}
+                        return {"resource": target.name, "status": "unsupported", "reason": str(exc)}
                     self.checkpoints.mark_failed(checkpoint, str(exc))
                     self._finish_stage(stage, "failed", {}, str(exc))
                     self._finish_run(run, "failed", {"resource": target.name}, str(exc))

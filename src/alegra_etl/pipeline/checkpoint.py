@@ -41,13 +41,29 @@ class CheckpointManager:
         if checkpoint:
             self._maybe_repair_inconsistent(checkpoint, resource, today)
             if checkpoint.status != "completed":
-                checkpoint.backfill_end_date = today
+                if checkpoint.backfill_end_date is None:
+                    checkpoint.backfill_end_date = today
                 if checkpoint.backfill_start_date is None:
                     checkpoint.backfill_start_date = self.backfill_start
                 if checkpoint.cursor_date is None and resource.strategy == SyncStrategy.DATE_WINDOW:
                     checkpoint.cursor_date = checkpoint.backfill_start_date or self.backfill_start
-                if checkpoint.status in {"running", "failed"}:
+                if checkpoint.status == "failed":
                     checkpoint.status = "pending"
+                elif checkpoint.status == "running":
+                    from alegra_etl.db.models import BackfillWorkItem
+
+                    active_lease = (
+                        self.session.query(BackfillWorkItem)
+                        .filter(
+                            BackfillWorkItem.company_id == self.company_id,
+                            BackfillWorkItem.resource_name == resource.name,
+                            BackfillWorkItem.status == "running",
+                            BackfillWorkItem.leased_until > datetime.now(UTC),
+                        )
+                        .count()
+                    )
+                    if active_lease == 0:
+                        checkpoint.status = "pending"
             return checkpoint
 
         checkpoint = SyncCheckpoint(
@@ -56,7 +72,9 @@ class CheckpointManager:
             status="pending",
             backfill_start_date=self.backfill_start,
             backfill_end_date=today,
-            cursor_date=self.backfill_start if resource.strategy == SyncStrategy.DATE_WINDOW else None,
+            cursor_date=self.backfill_start
+            if resource.strategy == SyncStrategy.DATE_WINDOW
+            else None,
             cursor_offset=0,
             metadata_json={},
         )
@@ -79,13 +97,17 @@ class CheckpointManager:
             return
 
         # FULL critical sin marca de backfill
-        if resource.strategy == SyncStrategy.FULL and "full_missing_completed_at" in issues:
-            if resource.priority not in {ResourcePriority.CRITICAL, ResourcePriority.HIGH}:
-                return
+        if (
+            resource.strategy == SyncStrategy.FULL
+            and "full_missing_completed_at" in issues
+            and resource.priority not in {ResourcePriority.CRITICAL, ResourcePriority.HIGH}
+        ):
+            return
 
         checkpoint.status = "pending"
         checkpoint.backfill_start_date = checkpoint.backfill_start_date or self.backfill_start
-        checkpoint.backfill_end_date = today
+        if checkpoint.backfill_end_date is None:
+            checkpoint.backfill_end_date = today
         if resource.strategy == SyncStrategy.DATE_WINDOW:
             checkpoint.cursor_date = (
                 checkpoint.cursor_date
@@ -99,6 +121,9 @@ class CheckpointManager:
         meta = dict(checkpoint.metadata_json or {})
         meta["repaired_at"] = datetime.now(UTC).isoformat()
         meta["repair_issues"] = issues
+        meta.pop("reconciliation_verified_at", None)
+        meta.pop("reconciliation_verified_generation", None)
+        meta.pop("reconciliation_resource", None)
         checkpoint.metadata_json = meta
         print(
             f"[checkpoint] Reparando {resource.name}: issues={issues} cursor={checkpoint.cursor_date}",
@@ -123,12 +148,7 @@ class CheckpointManager:
         from alegra_etl.pipeline.checkpoint_integrity import repair_checkpoint
 
         repaired: list[str] = []
-        today = _today_local()
-        rows = (
-            self.session.query(SyncCheckpoint)
-            .filter_by(company_id=self.company_id)
-            .all()
-        )
+        rows = self.session.query(SyncCheckpoint).filter_by(company_id=self.company_id).all()
         backfill_names = {r.name for r in get_backfill_resources(self.settings)}
         for row in rows:
             if row.resource_name not in backfill_names:
@@ -221,6 +241,9 @@ class CheckpointManager:
                 resource.name,
                 blockers,
             )
+            checkpoint.status = "pending"
+            checkpoint.backfill_completed_at = None
+            checkpoint.verified_at = None
             return False
         checkpoint.status = "completed"
         checkpoint.backfill_completed_at = datetime.now(UTC)
@@ -228,9 +251,15 @@ class CheckpointManager:
         return True
 
     def mark_skipped(self, checkpoint: SyncCheckpoint, reason: str) -> None:
-        checkpoint.status = "skipped"
+        self.mark_unsupported(checkpoint, reason)
+
+    def mark_unsupported(self, checkpoint: SyncCheckpoint, reason: str) -> None:
+        """Registra que Alegra no expone el recurso; nunca es ``completed``."""
+        checkpoint.status = "unsupported"
+        checkpoint.backfill_completed_at = None
+        checkpoint.verified_at = None
         meta = dict(checkpoint.metadata_json or {})
-        meta["skip_reason"] = reason
+        meta["unsupported_reason"] = reason
         checkpoint.metadata_json = meta
 
     def mark_failed(self, checkpoint: SyncCheckpoint, error: str) -> None:
@@ -285,7 +314,9 @@ class CheckpointManager:
                 last_synced_at=now,
                 backfill_start_date=self.backfill_start,
                 backfill_end_date=today,
-                cursor_date=self.backfill_start if resource.strategy == SyncStrategy.DATE_WINDOW else None,
+                cursor_date=self.backfill_start
+                if resource.strategy == SyncStrategy.DATE_WINDOW
+                else None,
                 cursor_offset=0,
                 metadata_json={"last_daily_sync_at": now.isoformat()},
             )
@@ -299,7 +330,9 @@ class CheckpointManager:
         checkpoint.metadata_json = meta
         # No tocar status / cursor / backfill_completed_at
 
-    def backfill_window(self, resource: ResourceDefinition, checkpoint: SyncCheckpoint) -> tuple[date, date]:
+    def backfill_window(
+        self, resource: ResourceDefinition, checkpoint: SyncCheckpoint
+    ) -> tuple[date, date]:
         end = checkpoint.backfill_end_date or _today_local()
         checkpoint.backfill_end_date = end
         if resource.strategy != SyncStrategy.DATE_WINDOW:
