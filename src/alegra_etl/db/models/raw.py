@@ -47,6 +47,7 @@ class WebhookEvent(Base, TimestampMixin):
     event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     resource_id: Mapped[str | None] = mapped_column(String(50))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    changes: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)

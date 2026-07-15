@@ -104,6 +104,28 @@ def upsert_source_documents(
     return count
 
 
+def get_source_document_payload(
+    session: Session,
+    *,
+    company_id: int,
+    resource_name: str,
+    alegra_id: str,
+) -> dict[str, Any] | None:
+    """Devuelve el payload canónico actual, o None si no existe."""
+    doc = (
+        session.query(SourceDocument)
+        .filter_by(
+            company_id=company_id,
+            resource_name=resource_name,
+            alegra_id=alegra_id,
+        )
+        .one_or_none()
+    )
+    if not doc or not isinstance(doc.payload, dict):
+        return None
+    return doc.payload
+
+
 def soft_delete_source_document(
     session: Session,
     *,

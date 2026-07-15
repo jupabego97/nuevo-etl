@@ -14,7 +14,11 @@ from sqlalchemy.orm import Session
 from alegra_etl.alegra.resources import resource_by_name, resource_for_webhook_event
 from alegra_etl.config import Settings
 from alegra_etl.db.models import DeadLetterEvent, WebhookEvent
-from alegra_etl.pipeline.source_loader import soft_delete_source_document
+from alegra_etl.pipeline.payload_diff import diff_payloads
+from alegra_etl.pipeline.source_loader import (
+    get_source_document_payload,
+    soft_delete_source_document,
+)
 from alegra_etl.pipeline.typed_loader import soft_delete_typed_document
 
 logger = logging.getLogger(__name__)
@@ -192,6 +196,21 @@ class WebhookProcessor:
                 failed += 1
         return {"processed": processed, "failed": failed, "pending": len(pending)}
 
+    def _snapshot_source(
+        self,
+        *,
+        resource_name: str | None,
+        resource_id: str | None,
+    ) -> dict[str, Any] | None:
+        if not resource_name or not resource_id:
+            return None
+        return get_source_document_payload(
+            self.session,
+            company_id=self.settings.company_id,
+            resource_name=resource_name,
+            alegra_id=resource_id,
+        )
+
     async def _process_event(self, event: WebhookEvent) -> None:
         event_type = resolve_event_type(event)
         resource_id = resolve_resource_id(event, event_type)
@@ -208,6 +227,7 @@ class WebhookProcessor:
             if not resource_name:
                 resource = resource_for_webhook_event(lookup_key)
                 resource_name = resource.name if resource else None
+            before = self._snapshot_source(resource_name=resource_name, resource_id=resource_id)
             if resource_name and resource_id:
                 soft_delete_source_document(
                     self.session,
@@ -223,6 +243,7 @@ class WebhookProcessor:
                         resource_id,
                         self.settings.company_id,
                     )
+            event.changes = diff_payloads(before, None)
             logger.info("Soft-delete aplicado para %s (%s)", event_type, resource_id)
             return
 
@@ -232,4 +253,17 @@ class WebhookProcessor:
             raise ValueError(f"No hay recurso mapeado para evento {event_type}")
         if not resource_id:
             raise ValueError(f"Evento {event_type} sin resource_id")
+
+        before = self._snapshot_source(resource_name=resource.name, resource_id=resource_id)
         await self.runner.run_single_resource(resource, resource_id=resource_id)
+        # Evita leer estado sucio de identidad SQLAlchemy tras el UPSERT.
+        self.session.expire_all()
+        after = self._snapshot_source(resource_name=resource.name, resource_id=resource_id)
+        event.changes = diff_payloads(before, after)
+        if event.changes.get("changed_fields"):
+            logger.info(
+                "Webhook %s id=%s cambios=%s",
+                event_type,
+                resource_id,
+                event.changes["changed_fields"],
+            )
