@@ -48,9 +48,7 @@ RESOURCE_TYPED_MAP: dict[str, TypedResourceMapping] = {
     "inventory-adjustments": TypedResourceMapping(
         FactInventoryAdjustment, date_column="adjustment_date"
     ),
-    "warehouse-transfers": TypedResourceMapping(
-        FactWarehouseTransfer, date_column="transfer_date"
-    ),
+    "warehouse-transfers": TypedResourceMapping(FactWarehouseTransfer, date_column="transfer_date"),
     "bank-accounts": TypedResourceMapping(FactBankAccount),
     "items": TypedResourceMapping(DimItem),
     "contacts": TypedResourceMapping(DimContact),
@@ -91,10 +89,11 @@ def count_typed_ids(
     if not mapping:
         return 0
     model = mapping.model
-    query = select(func.count(func.distinct(getattr(model, mapping.id_column)))).where(
-        model.company_id == company_id,
-        model.deleted_at.is_(None),
-    )
+    filters = [model.company_id == company_id]
+    deleted_at = getattr(model, "deleted_at", None)
+    if deleted_at is not None:
+        filters.append(deleted_at.is_(None))
+    query = select(func.count(func.distinct(getattr(model, mapping.id_column)))).where(*filters)
     if start_date and end_date and mapping.date_column:
         date_col = getattr(model, mapping.date_column)
         query = query.where(date_col >= start_date, date_col <= end_date)
@@ -132,10 +131,11 @@ def typed_ids(
     if not mapping:
         return set()
     model = mapping.model
-    query = select(getattr(model, mapping.id_column)).where(
-        model.company_id == company_id,
-        model.deleted_at.is_(None),
-    )
+    filters = [model.company_id == company_id]
+    deleted_at = getattr(model, "deleted_at", None)
+    if deleted_at is not None:
+        filters.append(deleted_at.is_(None))
+    query = select(getattr(model, mapping.id_column)).where(*filters)
     if start_date and end_date and mapping.date_column:
         date_col = getattr(model, mapping.date_column)
         query = query.where(date_col >= start_date, date_col <= end_date)

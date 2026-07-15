@@ -319,11 +319,54 @@ class BackfillWorkerRunner:
                                     manager = CheckpointManager(self.settings, worker_session)
                                     manager.try_mark_backfill_completed(checkpoint, resource)
                                 worker_session.commit()
+                    except Exception as exc:
+                        # Una falla de reconciliación invalida la verificación local:
+                        # se reencola el recurso completo y nunca se deja un checkpoint
+                        # aparentemente listo.
+                        for work_item in (
+                            worker_session.query(BackfillWorkItem)
+                            .filter_by(
+                                company_id=self.settings.company_id,
+                                resource_name=res_name,
+                            )
+                            .all()
+                        ):
+                            work_item.status = "pending"
+                            work_item.start_offset = 0
+                            work_item.verified_at = None
+                            work_item.error_message = f"fallo_grupo:{exc}"[:2000]
+                        checkpoint = (
+                            worker_session.query(SyncCheckpoint)
+                            .filter_by(
+                                company_id=self.settings.company_id,
+                                resource_name=res_name,
+                            )
+                            .one_or_none()
+                        )
+                        if checkpoint:
+                            checkpoint.status = "pending"
+                            checkpoint.backfill_completed_at = None
+                            checkpoint.verified_at = None
+                            metadata = dict(checkpoint.metadata_json or {})
+                            metadata.pop("reconciliation_verified_at", None)
+                            metadata.pop("reconciliation_verified_generation", None)
+                            metadata.pop("reconciliation_resource", None)
+                            checkpoint.metadata_json = metadata
+                        worker_session.commit()
+                        failed += 1
+                        logger.exception("Fallo de grupo de backfill %s", res_name)
                     finally:
                         release_backfill_lock(worker_session, self.settings.company_id, res_name)
 
             tasks = [_process_resource_group(name, group) for name, group in by_resource.items()]
-            await asyncio.gather(*tasks)
+            task_results = await asyncio.gather(*tasks, return_exceptions=True)
+            for task_result in task_results:
+                if isinstance(task_result, Exception):
+                    failed += 1
+                    logger.error(
+                        "Fallo no controlado en worker de backfill",
+                        exc_info=task_result,
+                    )
 
         run.status = "success"
         run.metrics = {"processed": processed, "failed": failed, **metrics}
