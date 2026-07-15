@@ -40,6 +40,8 @@ alegra-etl backfill
 alegra-etl daily-sync
 alegra-etl reconcile --resource invoices --days 30
 alegra-etl process-webhooks
+# En Railway shell (si alegra-etl no está en PATH):
+# PYTHONPATH=/app/src python -m alegra_etl process-webhooks
 alegra-etl build-marts
 alegra-etl serve-webhooks
 ```
@@ -64,9 +66,9 @@ alegra-etl serve-webhooks
 | Servicio | Config | Comando |
 |----------|--------|---------|
 | Webhooks | `railway.json` | `PYTHONPATH=/app/src uvicorn alegra_etl.web.app:create_app --factory --host 0.0.0.0 --port $PORT` |
-| Cron diario | `railway-cron.json` | `PYTHONPATH=/app/src alegra-etl daily-sync` |
-| Backfill histórico (temporal) | `railway-backfill.json` | `PYTHONPATH=/app/src alegra-etl backfill-step` |
-| Refresh maestros (semanal) | `railway-weekly.json` | `PYTHONPATH=/app/src alegra-etl weekly-refresh` |
+| Cron diario | `railway-cron.json` | `PYTHONPATH=/app/src python -m alegra_etl daily-sync` |
+| Backfill histórico (temporal) | `railway-backfill.json` | `PYTHONPATH=/app/src python -m alegra_etl backfill-step` |
+| Refresh maestros (semanal) | `railway-weekly.json` | `PYTHONPATH=/app/src python -m alegra_etl weekly-refresh` |
 
 4. En **ambos servicios**, referencia las variables del Postgres nuevo (`DATABASE_URL`, etc.) — no uses la BD del cron legacy.
 

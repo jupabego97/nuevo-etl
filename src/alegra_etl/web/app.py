@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import secrets
+import traceback
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from alegra_etl.config import Settings, get_settings
@@ -57,6 +57,20 @@ def is_webhook_authorized(presented: str | None, settings: Settings) -> bool:
     return secrets.compare_digest(presented, expected)
 
 
+async def _process_pending_webhooks() -> None:
+    """Procesa cola pending; se ejecuta vía BackgroundTasks (fiable en uvicorn)."""
+    settings = get_settings()
+    try:
+        with session_scope(settings) as session:
+            processor = WebhookProcessor(settings, session)
+            result = await processor.process_pending(limit=20)
+            session.commit()
+            print(f"[webhook] process_pending result={result}", flush=True)
+    except Exception:
+        print("[webhook] FALLO process_pending:", flush=True)
+        traceback.print_exc()
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     setup_logging(settings.log_level, settings.log_json)
@@ -68,6 +82,7 @@ def create_app() -> FastAPI:
 
     async def _handle_webhook(
         request: Request,
+        background_tasks: BackgroundTasks,
         *,
         path_token: str | None = None,
         x_webhook_secret: str | None = None,
@@ -91,33 +106,49 @@ def create_app() -> FastAPI:
             session.commit()
             event_id = str(event.id)
 
-        asyncio.create_task(_process_event_async(event_id))
+        # BackgroundTasks de FastAPI sobrevive al response; create_task a veces no.
+        background_tasks.add_task(_process_pending_webhooks)
         return {"status": "accepted", "event_id": event_id, "event": event_type}
 
     @app.post("/webhooks/alegra")
     async def receive_webhook(
         request: Request,
+        background_tasks: BackgroundTasks,
         x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
     ) -> dict[str, str]:
-        return await _handle_webhook(request, x_webhook_secret=x_webhook_secret)
+        return await _handle_webhook(
+            request,
+            background_tasks,
+            x_webhook_secret=x_webhook_secret,
+        )
 
     @app.post("/webhooks/alegra/{path_token}")
     async def receive_webhook_with_path_token(
         path_token: str,
         request: Request,
+        background_tasks: BackgroundTasks,
         x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
     ) -> dict[str, str]:
         return await _handle_webhook(
             request,
+            background_tasks,
             path_token=path_token,
             x_webhook_secret=x_webhook_secret,
         )
 
+    @app.post("/webhooks/process-pending")
+    async def process_pending_endpoint(
+        request: Request,
+        x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
+    ) -> dict[str, Any]:
+        """Endpoint de mantenimiento para drenar la cola pending."""
+        presented = extract_presented_secret(request, x_webhook_secret=x_webhook_secret)
+        if not is_webhook_authorized(presented, settings):
+            raise HTTPException(status_code=401, detail="Webhook no autorizado")
+        with session_scope(settings) as session:
+            processor = WebhookProcessor(settings, session)
+            result = await processor.process_pending(limit=100)
+            session.commit()
+        return {"status": "ok", **result}
+
     return app
-
-
-async def _process_event_async(event_id: str) -> None:
-    settings = get_settings()
-    with session_scope(settings) as session:
-        processor = WebhookProcessor(settings, session)
-        await processor.process_pending(limit=10)
