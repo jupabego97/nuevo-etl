@@ -24,6 +24,31 @@ def _str_id(value: Any) -> str | None:
     return str(value)
 
 
+def resolve_tax_id(record: dict[str, Any]) -> str | None:
+    """Obtiene el ID del impuesto o una identidad determinística documentada."""
+    for key in ("id", "idTax", "taxId", "taxID"):
+        value = record.get(key)
+        if isinstance(value, dict):
+            value = value.get("id")
+        if value is not None and str(value).strip():
+            return _str_id(value)
+
+    favorable = record.get("categoryFavorable")
+    payable = record.get("categoryToBePaid")
+    stable_identity = {
+        "name": record.get("name"),
+        "percentage": record.get("percentage"),
+        "type": record.get("type"),
+        "rate": record.get("rate"),
+        "code": record.get("code"),
+        "category_favorable": favorable.get("id") if isinstance(favorable, dict) else None,
+        "category_payable": payable.get("id") if isinstance(payable, dict) else None,
+    }
+    if not any(value is not None for value in stable_identity.values()):
+        return None
+    return f"synthetic-tax:{hash_payload(stable_identity)[:40]}"
+
+
 def _parse_date(value: Any):
     if not value:
         return None
@@ -46,7 +71,9 @@ def _id(obj: Any) -> str | None:
     return None
 
 
-def parse_items(records: list[dict[str, Any]], company_id: int) -> tuple[list[dict], list[dict], list[dict]]:
+def parse_items(
+    records: list[dict[str, Any]], company_id: int
+) -> tuple[list[dict], list[dict], list[dict]]:
     items: list[dict] = []
     prices: list[dict] = []
     inventories: list[dict] = []
@@ -77,7 +104,9 @@ def parse_items(records: list[dict[str, Any]], company_id: int) -> tuple[list[di
                 "status": record.get("status"),
                 "is_inventoriable": bool(inventory),
                 "unit": inventory.get("unit") if isinstance(inventory, dict) else None,
-                "unit_cost": _dec(inventory.get("unitCost")) if isinstance(inventory, dict) else None,
+                "unit_cost": _dec(inventory.get("unitCost"))
+                if isinstance(inventory, dict)
+                else None,
                 "category_id": _id(record.get("category")),
                 "category_name": _name(record.get("category")),
                 "barcode": barcode,
@@ -222,7 +251,9 @@ def _invoice_numbering(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def parse_sales_invoices(records: list[dict[str, Any]], company_id: int) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+def parse_sales_invoices(
+    records: list[dict[str, Any]], company_id: int
+) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     headers: list[dict] = []
     lines: list[dict] = []
     payments: list[dict] = []
@@ -254,11 +285,15 @@ def parse_sales_invoices(records: list[dict[str, Any]], company_id: int) -> tupl
                 "warehouse_alegra_id": _id(record.get("warehouse")),
                 "cost_center_alegra_id": _id(record.get("costCenter")),
                 "currency_code": currency.get("code") if isinstance(currency, dict) else None,
-                "exchange_rate": _dec(currency.get("exchangeRate")) if isinstance(currency, dict) else None,
+                "exchange_rate": _dec(currency.get("exchangeRate"))
+                if isinstance(currency, dict)
+                else None,
                 "subtotal": _dec(record.get("subtotal")),
                 "discount": _dec(record.get("discount")),
                 "tax_total": None,
-                "retention_total": sum((_dec(r.get("amount")) or Decimal(0)) for r in record.get("retentions") or []),
+                "retention_total": sum(
+                    (_dec(r.get("amount")) or Decimal(0)) for r in record.get("retentions") or []
+                ),
                 "invoice_total": _dec(record.get("total")),
                 "total_paid": _dec(record.get("totalPaid")),
                 "balance": _dec(record.get("balance")),
@@ -278,7 +313,9 @@ def parse_sales_invoices(records: list[dict[str, Any]], company_id: int) -> tupl
                     "quantity": _dec(item.get("quantity")),
                     "unit_price": _dec(item.get("price")),
                     "discount": _dec(item.get("discount")),
-                    "tax_total": sum((_dec(t.get("amount")) or Decimal(0)) for t in item.get("tax") or []),
+                    "tax_total": sum(
+                        (_dec(t.get("amount")) or Decimal(0)) for t in item.get("tax") or []
+                    ),
                     "line_subtotal": _dec(item.get("subtotal")),
                     "line_total": _dec(item.get("total")),
                     "raw_json": item,
@@ -311,7 +348,9 @@ def parse_sales_invoices(records: list[dict[str, Any]], company_id: int) -> tupl
     return headers, lines, payments, applications
 
 
-def parse_purchase_bills(records: list[dict[str, Any]], company_id: int) -> tuple[list[dict], list[dict]]:
+def parse_purchase_bills(
+    records: list[dict[str, Any]], company_id: int
+) -> tuple[list[dict], list[dict]]:
     headers: list[dict] = []
     lines: list[dict] = []
 
@@ -322,7 +361,11 @@ def parse_purchase_bills(records: list[dict[str, Any]], company_id: int) -> tupl
         number_template = record.get("numberTemplate") or {}
         bill_number = None
         if isinstance(number_template, dict):
-            bill_number = str(number_template.get("number")) if number_template.get("number") is not None else None
+            bill_number = (
+                str(number_template.get("number"))
+                if number_template.get("number") is not None
+                else None
+            )
         currency = record.get("currency") or {}
         bill_date = _parse_date(record.get("date"))
         if bill_date is None:
@@ -341,7 +384,9 @@ def parse_purchase_bills(records: list[dict[str, Any]], company_id: int) -> tupl
                 "provider_name": _name(record.get("provider")),
                 "warehouse_alegra_id": _id(record.get("warehouse")),
                 "currency_code": currency.get("code") if isinstance(currency, dict) else None,
-                "exchange_rate": _dec(currency.get("exchangeRate")) if isinstance(currency, dict) else None,
+                "exchange_rate": _dec(currency.get("exchangeRate"))
+                if isinstance(currency, dict)
+                else None,
                 "bill_total": _dec(record.get("total")),
                 "total_paid": _dec(record.get("totalPaid")),
                 "balance": _dec(record.get("balance")),
@@ -391,7 +436,9 @@ def parse_purchase_bills(records: list[dict[str, Any]], company_id: int) -> tupl
     return headers, lines
 
 
-def parse_credit_notes(records: list[dict[str, Any]], company_id: int) -> tuple[list[dict], list[dict]]:
+def parse_credit_notes(
+    records: list[dict[str, Any]], company_id: int
+) -> tuple[list[dict], list[dict]]:
     headers: list[dict] = []
     lines: list[dict] = []
     for record in records:
@@ -584,7 +631,9 @@ def parse_warehouse_transfers(records: list[dict[str, Any]], company_id: int) ->
                 "company_id": company_id,
                 "alegra_id": alegra_id,
                 "transfer_date": _parse_date(record.get("date")),
-                "origin_warehouse_id": _id(record.get("originWarehouse") or record.get("warehouseOrigin")),
+                "origin_warehouse_id": _id(
+                    record.get("originWarehouse") or record.get("warehouseOrigin")
+                ),
                 "destination_warehouse_id": _id(
                     record.get("destinationWarehouse") or record.get("warehouseDestination")
                 ),

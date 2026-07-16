@@ -26,6 +26,7 @@ from alegra_etl.alegra.parsers import (
     parse_sales_invoices,
     parse_simple_dimension,
     parse_warehouse_transfers,
+    resolve_tax_id,
 )
 from alegra_etl.alegra.resources import ResourceDefinition
 from alegra_etl.db.models import (
@@ -137,7 +138,7 @@ def transform_and_load(
     if parser == "taxes":
         rows = []
         for record in records:
-            alegra_id = _str_id(record.get("id"))
+            alegra_id = resolve_tax_id(record)
             if not alegra_id:
                 continue
             rows.append(
@@ -186,11 +187,15 @@ def transform_and_load(
 
     if parser == "inventory_adjustments":
         rows = parse_inventory_adjustments(records, company_id)
-        return upsert_rows(session, FactInventoryAdjustment.__table__, rows, ["company_id", "alegra_id"])
+        return upsert_rows(
+            session, FactInventoryAdjustment.__table__, rows, ["company_id", "alegra_id"]
+        )
 
     if parser == "warehouse_transfers":
         rows = parse_warehouse_transfers(records, company_id)
-        return upsert_rows(session, FactWarehouseTransfer.__table__, rows, ["company_id", "alegra_id"])
+        return upsert_rows(
+            session, FactWarehouseTransfer.__table__, rows, ["company_id", "alegra_id"]
+        )
 
     logger.warning("Parser %s no implementado para %s", parser, resource.name)
     return 0
@@ -233,10 +238,11 @@ def transform_and_load_resilient(
                 )
             )
             logger.warning(
-                "Skip tipado %s id=%s: %s",
+                "Skip tipado %s id=%s: %s keys=%s",
                 resource.name,
                 alegra_id,
                 exc,
+                sorted(record) if isinstance(record, dict) else type(record).__name__,
             )
     return loaded, skipped
 
@@ -258,11 +264,7 @@ def _load_invoices(session: Session, records: list[dict[str, Any]], company_id: 
         ["company_id", "payment_alegra_id", "invoice_alegra_id"],
     )
     for invoice_id in {h["alegra_id"] for h in headers}:
-        current_lines = {
-            ln["line_number"]
-            for ln in lines
-            if ln["invoice_alegra_id"] == invoice_id
-        }
+        current_lines = {ln["line_number"] for ln in lines if ln["invoice_alegra_id"] == invoice_id}
         _reconcile_child_lines(
             session,
             FactSalesInvoiceLine.__table__,
@@ -285,11 +287,7 @@ def _load_bills(session: Session, records: list[dict[str, Any]], company_id: int
         ["company_id", "bill_alegra_id", "line_number"],
     )
     for bill_id in {h["alegra_id"] for h in headers}:
-        current_lines = {
-            ln["line_number"]
-            for ln in lines
-            if ln["bill_alegra_id"] == bill_id
-        }
+        current_lines = {ln["line_number"] for ln in lines if ln["bill_alegra_id"] == bill_id}
         _reconcile_child_lines(
             session,
             FactPurchaseBillLine.__table__,
@@ -313,9 +311,7 @@ def _load_credit_notes(session: Session, records: list[dict[str, Any]], company_
     )
     for note_id in {h["alegra_id"] for h in headers}:
         current_lines = {
-            ln["line_number"]
-            for ln in lines
-            if ln["credit_note_alegra_id"] == note_id
+            ln["line_number"] for ln in lines if ln["credit_note_alegra_id"] == note_id
         }
         _reconcile_child_lines(
             session,

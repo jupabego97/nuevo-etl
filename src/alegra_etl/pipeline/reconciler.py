@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from alegra_etl.alegra.client import AlegraClient
+from alegra_etl.alegra.parsers import resolve_tax_id
 from alegra_etl.alegra.resources import ResourceDefinition, SyncStrategy, resource_by_name
 from alegra_etl.config import Settings
 from alegra_etl.db.models import (
@@ -95,15 +96,14 @@ class Reconciler:
                     fallback_remove_params=resource.fallback_remove_params,
                 )
                 api_counts[day_key] = len(records)
-                api_ids = {
-                    str(record.get("id")) for record in records if record.get("id") is not None
-                }
+                resolved_ids = [self._api_record_id(resource_name, record) for record in records]
+                api_ids = {value for value in resolved_ids if value is not None}
                 source_day_ids = self._source_ids_for_date(resource_name, current)
                 typed_day_ids = self._typed_ids_for_date(resource_name, current)
                 source_counts[day_key] = len(source_day_ids)
                 typed_counts[day_key] = len(typed_day_ids)
                 api_counts[f"{day_key}:distinct"] = len(api_ids)
-                api_counts[f"{day_key}:missing_id"] = len(records) - len(api_ids)
+                api_counts[f"{day_key}:missing_id"] = sum(value is None for value in resolved_ids)
                 api_counts[f"{day_key}:api_ids"] = api_ids
                 api_counts[f"{day_key}:source_ids"] = source_day_ids
                 api_counts[f"{day_key}:typed_ids"] = typed_day_ids
@@ -195,7 +195,7 @@ class Reconciler:
             api_records += len(records)
             expected_children += self._expected_child_count(resource.name, records)
             for record in records:
-                value = record.get("id")
+                value = self._api_record_id(resource.name, record)
                 if value is None:
                     missing_api_ids += 1
                 else:
@@ -376,6 +376,13 @@ class Reconciler:
             target_date,
             target_date,
         )
+
+    @staticmethod
+    def _api_record_id(resource_name: str, record: dict[str, Any]) -> str | None:
+        if resource_name == "taxes":
+            return resolve_tax_id(record)
+        value = record.get("id")
+        return str(value) if value is not None and str(value).strip() else None
 
     @staticmethod
     def _expected_child_count(resource_name: str, records: list[dict[str, Any]]) -> int:

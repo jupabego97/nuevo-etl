@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from alegra_etl.alegra.client import hash_payload
+from alegra_etl.alegra.parsers import resolve_tax_id
 from alegra_etl.alegra.resources import ResourceDefinition
 from alegra_etl.db.models.canonical import SourceDocument
 
@@ -35,6 +36,8 @@ def _extract_status(record: dict[str, Any]) -> str | None:
 
 def _resolve_alegra_id(record: dict[str, Any], resource_name: str) -> str | None:
     """Obtiene un id estable; endpoints singleton (company) pueden no traer `id`."""
+    if resource_name == "taxes":
+        return resolve_tax_id(record)
     for key in ("id", "idCompany", "companyId", "identification"):
         value = record.get(key)
         if value is not None and str(value).strip() != "":

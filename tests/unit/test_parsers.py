@@ -1,4 +1,9 @@
-from alegra_etl.alegra.parsers import parse_items, parse_purchase_bills, parse_sales_invoices
+from alegra_etl.alegra.parsers import (
+    parse_items,
+    parse_purchase_bills,
+    parse_sales_invoices,
+    resolve_tax_id,
+)
 
 
 def test_parse_sales_invoice_splits_header_and_lines(sample_invoice):
@@ -74,3 +79,19 @@ def test_parse_purchase_bill_mixed_item_and_category_share_keys():
     assert lines[0]["category_alegra_id"] is None
     assert lines[1]["item_alegra_id"] is None
     assert lines[1]["category_alegra_id"] == "9"
+
+
+def test_resolve_tax_id_uses_api_id_when_present():
+    assert resolve_tax_id({"id": "tax-1", "name": "IVA"}) == "tax-1"
+
+
+def test_resolve_tax_id_is_stable_when_api_omits_id():
+    tax = {
+        "name": "IVA",
+        "percentage": 19,
+        "type": "IVA",
+        "categoryFavorable": {"id": "5011"},
+        "categoryToBePaid": {"id": "5043"},
+    }
+    assert resolve_tax_id(tax) == resolve_tax_id(dict(tax))
+    assert resolve_tax_id(tax).startswith("synthetic-tax:")
