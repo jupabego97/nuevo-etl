@@ -139,10 +139,22 @@ def backfill_workers(
 
         with session_scope(settings) as session:
             runner = BackfillWorkerRunner(settings, session)
-            result = await runner.run_until_idle(resource_name=resource)
+            # Bucle durable: no salir con error ante bloqueos temporales
+            # (Railway reiniciaría el contenedor en vacío).
+            result = await runner.run_until_idle(
+                resource_name=resource,
+                idle_sleep_seconds=60,
+            )
             typer.echo(str(result))
-            if result.get("status") == "blocked":
-                raise typer.Exit(code=2)
+            if result.get("status") == "complete":
+                return
+            # blocked/batch_limit: salir 0 para no provocar restart storm
+            # si restartPolicy=ON_FAILURE; el log ya explica el estado.
+            print(
+                f"[backfill-workers] Finalizó sin complete: {result.get('status')} "
+                f"reason={result.get('reason')}",
+                flush=True,
+            )
 
     asyncio.run(_run())
 

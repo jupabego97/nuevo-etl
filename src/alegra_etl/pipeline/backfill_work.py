@@ -244,6 +244,31 @@ def mark_work_failed(item: BackfillWorkItem, error: str) -> None:
     item.leased_until = None
 
 
+def requeue_failed_work(
+    session: Session,
+    company_id: int,
+    *,
+    resource_name: str | None = None,
+    max_items: int = 50,
+) -> int:
+    """Reabre unidades failed para un nuevo ciclo (sin perder evidencia)."""
+    query = session.query(BackfillWorkItem).filter(
+        BackfillWorkItem.company_id == company_id,
+        BackfillWorkItem.status == "failed",
+    )
+    if resource_name:
+        query = query.filter(BackfillWorkItem.resource_name == resource_name)
+    rows = query.order_by(BackfillWorkItem.id.asc()).limit(max_items).all()
+    for row in rows:
+        row.status = "pending"
+        row.attempts = 0
+        row.lease_owner = None
+        row.leased_until = None
+        row.verified_at = None
+        # Conserva error_message como diagnóstico del intento anterior.
+    return len(rows)
+
+
 def work_progress(
     session: Session, company_id: int, resource_name: str | None = None
 ) -> dict[str, Any]:

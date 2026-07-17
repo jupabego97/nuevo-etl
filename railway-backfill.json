@@ -6,6 +6,7 @@
   },
   "deploy": {
     "startCommand": "PYTHONUNBUFFERED=1 PYTHONPATH=/app/src python -u -m alegra_etl backfill-workers",
-    "restartPolicyType": "NEVER"
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
   }
 }

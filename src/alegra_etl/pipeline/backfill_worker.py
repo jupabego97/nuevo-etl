@@ -19,6 +19,7 @@ from alegra_etl.pipeline.backfill_work import (
     claim_work_items,
     mark_work_failed,
     mark_work_verified,
+    requeue_failed_work,
     seed_all_pending_work,
     work_progress,
 )
@@ -40,50 +41,96 @@ class BackfillWorkerRunner:
         *,
         resource_name: str | None = None,
         max_batches: int | None = None,
+        idle_sleep_seconds: int = 60,
+        max_idle_cycles: int | None = None,
     ) -> dict[str, Any]:
-        """Consume todos los lotes; no confunde ``no_work`` con completitud."""
+        """Consume lotes hasta completar; ante bloqueo espera y reintenta."""
         batches: list[dict[str, Any]] = []
+        idle_cycles = 0
+        last_result: dict[str, Any] | None = None
+
         while max_batches is None or len(batches) < max_batches:
             result = await self.run_batch(resource_name=resource_name)
+            last_result = result
             batches.append(result)
             progress = result.get("progress", {})
             by_status = progress.get("by_status", {})
-            if result.get("status") == "no_work":
-                if (
-                    by_status.get("failed", 0)
-                    or by_status.get("pending", 0)
-                    or by_status.get("running", 0)
-                ):
+
+            if result.get("status") != "no_work":
+                idle_cycles = 0
+                continue
+
+            # Sin claimable work: reabrir failed y evaluar gate.
+            requeued = requeue_failed_work(
+                self.session,
+                self.settings.company_id,
+                resource_name=resource_name,
+            )
+            if requeued:
+                self.session.commit()
+                print(
+                    f"[backfill-workers] Reencolados {requeued} work items failed",
+                    flush=True,
+                )
+                idle_cycles = 0
+                continue
+
+            if by_status.get("pending", 0) or by_status.get("running", 0):
+                # Hay trabajo leased/pendiente no claimable aún: esperar leases.
+                idle_cycles += 1
+                print(
+                    f"[backfill-workers] Esperando leases/pendientes "
+                    f"(ciclo={idle_cycles}) progress={by_status}",
+                    flush=True,
+                )
+                if max_idle_cycles is not None and idle_cycles >= max_idle_cycles:
                     return {
                         "status": "blocked",
                         "reason": "work_items_no_verificados",
                         "batches": len(batches),
                         "last": result,
                     }
-                resources = {r.name: r for r in get_backfill_resources(self.settings)}
-                checkpoints = (
-                    self.session.query(SyncCheckpoint)
-                    .filter_by(company_id=self.settings.company_id)
-                    .all()
-                )
-                gate = global_backfill_status(self.session, self.settings, resources, checkpoints)
-                if not gate["all_backfill_complete"]:
-                    return {
-                        "status": "blocked",
-                        "reason": "gate_de_completitud",
-                        "batches": len(batches),
-                        "gate": gate,
-                        "last": result,
-                    }
+                await asyncio.sleep(idle_sleep_seconds)
+                continue
+
+            resources = {r.name: r for r in get_backfill_resources(self.settings)}
+            checkpoints = (
+                self.session.query(SyncCheckpoint)
+                .filter_by(company_id=self.settings.company_id)
+                .all()
+            )
+            gate = global_backfill_status(self.session, self.settings, resources, checkpoints)
+            if gate["all_backfill_complete"]:
                 return {
                     "status": "complete",
                     "batches": len(batches),
                     "last": result,
+                    "gate": gate,
                 }
+
+            idle_cycles += 1
+            print(
+                f"[backfill-workers] Gate incompleto; reintento en {idle_sleep_seconds}s "
+                f"(ciclo={idle_cycles}) pending={gate.get('pending', [])[:8]}",
+                flush=True,
+            )
+            if max_idle_cycles is not None and idle_cycles >= max_idle_cycles:
+                return {
+                    "status": "blocked",
+                    "reason": "gate_de_completitud",
+                    "batches": len(batches),
+                    "gate": gate,
+                    "last": result,
+                }
+            # Reseed por si faltan work items de recursos reabiertos.
+            seed_all_pending_work(self.settings, self.session)
+            self.session.commit()
+            await asyncio.sleep(idle_sleep_seconds)
+
         return {
             "status": "batch_limit",
             "batches": len(batches),
-            "last": batches[-1] if batches else None,
+            "last": last_result,
         }
 
     async def run_batch(self, *, resource_name: str | None = None) -> dict[str, Any]:
@@ -358,7 +405,17 @@ class BackfillWorkerRunner:
                     finally:
                         release_backfill_lock(worker_session, self.settings.company_id, res_name)
 
-            tasks = [_process_resource_group(name, group) for name, group in by_resource.items()]
+            # Limitar recursos en paralelo para evitar OOM / reinicios en Railway.
+            max_parallel_resources = min(2, max(1, self.settings.sync_max_concurrent // 4))
+            resource_semaphore = asyncio.Semaphore(max_parallel_resources)
+
+            async def _bounded_resource_group(name: str, group: list[int]) -> None:
+                async with resource_semaphore:
+                    await _process_resource_group(name, group)
+
+            tasks = [
+                _bounded_resource_group(name, group) for name, group in by_resource.items()
+            ]
             task_results = await asyncio.gather(*tasks, return_exceptions=True)
             for task_result in task_results:
                 if isinstance(task_result, Exception):
