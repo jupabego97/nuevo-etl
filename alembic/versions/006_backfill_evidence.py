@@ -14,8 +14,10 @@ import sqlalchemy as sa
 from alembic import op
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from alegra_etl.config import get_settings
+from helpers import add_column_if_missing, column_exists
 
 revision = "006_backfill_evidence"
 down_revision = "005_backfill_integrity"
@@ -34,9 +36,14 @@ def upgrade() -> None:
         ("confirmed_offset", sa.Integer(), False),
     )
     for name, column_type, nullable in columns:
-        op.add_column(
+        add_column_if_missing(
             table,
-            sa.Column(name, column_type, nullable=nullable, server_default="0" if not nullable else None),
+            sa.Column(
+                name,
+                column_type,
+                nullable=nullable,
+                server_default="0" if not nullable else None,
+            ),
             schema=schema,
         )
 
@@ -50,4 +57,5 @@ def downgrade() -> None:
         "api_distinct_ids",
         "api_records",
     ):
-        op.drop_column("backfill_work_items", name, schema=schema)
+        if column_exists("backfill_work_items", name, schema):
+            op.drop_column("backfill_work_items", name, schema=schema)

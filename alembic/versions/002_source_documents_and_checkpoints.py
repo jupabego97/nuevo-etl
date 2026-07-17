@@ -10,13 +10,21 @@ from __future__ import annotations
 import os
 import sys
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from alegra_etl.config import get_settings
+from helpers import (
+    add_column_if_missing,
+    column_exists,
+    create_index_if_missing,
+    create_table_if_missing,
+    table_exists,
+)
 
 revision = "002_source_docs"
 down_revision = "001_initial"
@@ -28,7 +36,7 @@ def upgrade() -> None:
     settings = get_settings()
     schema = settings.db_schema
 
-    op.create_table(
+    create_table_if_missing(
         "source_documents",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
         sa.Column("company_id", sa.Integer(), nullable=False),
@@ -40,34 +48,105 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=30), nullable=True),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_run_id", UUID(as_uuid=True), nullable=True),
-        sa.Column("last_seen_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("metadata_json", JSONB(), server_default=sa.text("'{}'::jsonb"), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "last_seen_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "metadata_json",
+            JSONB(),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("company_id", "resource_name", "alegra_id", name="uq_source_document"),
+        sa.UniqueConstraint(
+            "company_id", "resource_name", "alegra_id", name="uq_source_document"
+        ),
         schema=schema,
     )
-    op.create_index("ix_source_documents_company_id", "source_documents", ["company_id"], schema=schema)
-    op.create_index("ix_source_documents_resource_name", "source_documents", ["resource_name"], schema=schema)
-    op.create_index("ix_source_documents_alegra_id", "source_documents", ["alegra_id"], schema=schema)
-    op.create_index("ix_source_documents_document_date", "source_documents", ["document_date"], schema=schema)
+    create_index_if_missing(
+        "ix_source_documents_company_id",
+        "source_documents",
+        ["company_id"],
+        schema=schema,
+    )
+    create_index_if_missing(
+        "ix_source_documents_resource_name",
+        "source_documents",
+        ["resource_name"],
+        schema=schema,
+    )
+    create_index_if_missing(
+        "ix_source_documents_alegra_id",
+        "source_documents",
+        ["alegra_id"],
+        schema=schema,
+    )
+    create_index_if_missing(
+        "ix_source_documents_document_date",
+        "source_documents",
+        ["document_date"],
+        schema=schema,
+    )
 
-    op.add_column("sync_checkpoints", sa.Column("status", sa.String(length=30), server_default="pending", nullable=False), schema=schema)
-    op.add_column("sync_checkpoints", sa.Column("backfill_start_date", sa.Date(), nullable=True), schema=schema)
-    op.add_column("sync_checkpoints", sa.Column("backfill_end_date", sa.Date(), nullable=True), schema=schema)
-    op.add_column("sync_checkpoints", sa.Column("cursor_date", sa.Date(), nullable=True), schema=schema)
-    op.add_column("sync_checkpoints", sa.Column("cursor_offset", sa.Integer(), server_default="0", nullable=False), schema=schema)
-    op.add_column("sync_checkpoints", sa.Column("backfill_completed_at", sa.DateTime(timezone=True), nullable=True), schema=schema)
+    add_column_if_missing(
+        "sync_checkpoints",
+        sa.Column("status", sa.String(length=30), server_default="pending", nullable=False),
+        schema=schema,
+    )
+    add_column_if_missing(
+        "sync_checkpoints",
+        sa.Column("backfill_start_date", sa.Date(), nullable=True),
+        schema=schema,
+    )
+    add_column_if_missing(
+        "sync_checkpoints",
+        sa.Column("backfill_end_date", sa.Date(), nullable=True),
+        schema=schema,
+    )
+    add_column_if_missing(
+        "sync_checkpoints",
+        sa.Column("cursor_date", sa.Date(), nullable=True),
+        schema=schema,
+    )
+    add_column_if_missing(
+        "sync_checkpoints",
+        sa.Column("cursor_offset", sa.Integer(), server_default="0", nullable=False),
+        schema=schema,
+    )
+    add_column_if_missing(
+        "sync_checkpoints",
+        sa.Column("backfill_completed_at", sa.DateTime(timezone=True), nullable=True),
+        schema=schema,
+    )
 
 
 def downgrade() -> None:
     settings = get_settings()
     schema = settings.db_schema
-    op.drop_column("sync_checkpoints", "backfill_completed_at", schema=schema)
-    op.drop_column("sync_checkpoints", "cursor_offset", schema=schema)
-    op.drop_column("sync_checkpoints", "cursor_date", schema=schema)
-    op.drop_column("sync_checkpoints", "backfill_end_date", schema=schema)
-    op.drop_column("sync_checkpoints", "backfill_start_date", schema=schema)
-    op.drop_column("sync_checkpoints", "status", schema=schema)
-    op.drop_table("source_documents", schema=schema)
+    for column in (
+        "backfill_completed_at",
+        "cursor_offset",
+        "cursor_date",
+        "backfill_end_date",
+        "backfill_start_date",
+        "status",
+    ):
+        if column_exists("sync_checkpoints", column, schema):
+            op.drop_column("sync_checkpoints", column, schema=schema)
+    if table_exists("source_documents", schema):
+        op.drop_table("source_documents", schema=schema)

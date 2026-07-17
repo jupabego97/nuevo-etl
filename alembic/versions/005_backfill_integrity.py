@@ -15,8 +15,16 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "src")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from alegra_etl.config import get_settings
+from helpers import (
+    add_column_if_missing,
+    column_exists,
+    create_index_if_missing,
+    create_table_if_missing,
+    table_exists,
+)
 
 revision = "005_backfill_integrity"
 down_revision = "004_webhook_changes"
@@ -29,18 +37,18 @@ def upgrade() -> None:
     schema = settings.db_schema
     print(f"[migrate] 005: backfill_work_items en {schema}", flush=True)
 
-    op.add_column(
+    add_column_if_missing(
         "sync_checkpoints",
         sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
         schema=schema,
     )
-    op.add_column(
+    add_column_if_missing(
         "sync_checkpoints",
         sa.Column("backfill_generation", sa.Integer(), server_default="1", nullable=False),
         schema=schema,
     )
 
-    op.create_table(
+    create_table_if_missing(
         "backfill_work_items",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
         sa.Column("company_id", sa.Integer(), nullable=False),
@@ -58,21 +66,38 @@ def upgrade() -> None:
         sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_run_id", UUID(as_uuid=True), nullable=True),
         sa.Column("error_message", sa.Text(), nullable=True),
-        sa.Column("metadata_json", JSONB(), server_default=sa.text("'{}'::jsonb"), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "metadata_json",
+            JSONB(),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("company_id", "resource_name", "work_key", name="uq_backfill_work_item"),
+        sa.UniqueConstraint(
+            "company_id", "resource_name", "work_key", name="uq_backfill_work_item"
+        ),
         schema=schema,
     )
-    op.create_index(
+    create_index_if_missing(
         "ix_backfill_work_items_status",
         "backfill_work_items",
         ["company_id", "resource_name", "status"],
         schema=schema,
     )
 
-    op.create_table(
+    create_table_if_missing(
         "etl_parse_skips",
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
         sa.Column("company_id", sa.Integer(), nullable=False),
@@ -81,8 +106,18 @@ def upgrade() -> None:
         sa.Column("reason", sa.String(length=200), nullable=False),
         sa.Column("payload", JSONB(), nullable=False),
         sa.Column("run_id", UUID(as_uuid=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.PrimaryKeyConstraint("id"),
         schema=schema,
     )
@@ -123,8 +158,18 @@ def upgrade() -> None:
 def downgrade() -> None:
     settings = get_settings()
     schema = settings.db_schema
-    op.drop_table("etl_parse_skips", schema=schema)
-    op.drop_index("ix_backfill_work_items_status", table_name="backfill_work_items", schema=schema)
-    op.drop_table("backfill_work_items", schema=schema)
-    op.drop_column("sync_checkpoints", "backfill_generation", schema=schema)
-    op.drop_column("sync_checkpoints", "verified_at", schema=schema)
+    if table_exists("etl_parse_skips", schema):
+        op.drop_table("etl_parse_skips", schema=schema)
+    if table_exists("backfill_work_items", schema):
+        try:
+            op.drop_index(
+                "ix_backfill_work_items_status",
+                table_name="backfill_work_items",
+                schema=schema,
+            )
+        except Exception:
+            pass
+        op.drop_table("backfill_work_items", schema=schema)
+    for column in ("backfill_generation", "verified_at"):
+        if column_exists("sync_checkpoints", column, schema):
+            op.drop_column("sync_checkpoints", column, schema=schema)
