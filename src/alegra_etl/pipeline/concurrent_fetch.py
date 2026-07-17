@@ -71,6 +71,28 @@ def _page_extremes(
     return (ids[0], ids[-1]) if ids else (None, None)
 
 
+def _page_fingerprint(page: list[dict[str, Any]]) -> tuple[str, ...]:
+    ids = [str(record.get("id")) for record in page if record.get("id") is not None]
+    if ids:
+        return tuple(ids)
+    # Sin id: fingerprint por payload estable para detectar repetición.
+    return tuple(sorted(str(sorted(record.items())) for record in page))
+
+
+def _detect_repeated_pages(
+    results: list[tuple[int, list[dict[str, Any]], dict[str, Any] | None]],
+) -> bool:
+    """True si offsets distintos devolvieron el mismo contenido (API ignora start)."""
+    fingerprints: list[tuple[str, ...]] = []
+    for _, page, _ in results:
+        if not page:
+            continue
+        fingerprints.append(_page_fingerprint(page))
+    if len(fingerprints) < 2:
+        return False
+    return len(set(fingerprints)) == 1
+
+
 def _compute_next_offset(
     results: list[tuple[int, list[dict[str, Any]], dict[str, Any] | None]],
     page_size: int,
@@ -100,16 +122,17 @@ def _is_batch_complete(
     if not non_empty:
         return True
 
+    _, last_page = max(non_empty, key=lambda x: x[0])
+    # Página corta = fin real de la colección, aunque metadata.total mienta.
+    if len(last_page) < page_size:
+        return True
+
     if total is not None:
         next_off = _compute_next_offset(results, page_size, start_offset)
         return next_off >= total
 
-    # Sin metadata: completar solo si alguna página vino corta o vacía al final del lote
-    if len(non_empty) < len(requested_offsets):
-        return True
-
-    _, last_page = max(non_empty, key=lambda x: x[0])
-    return len(last_page) < page_size
+    # Sin metadata: completar si faltó alguna página del lote pedido
+    return len(non_empty) < len(requested_offsets)
 
 
 async def fetch_page_batch(
@@ -167,7 +190,8 @@ async def fetch_page_batch(
                 client, endpoint, offset, page_size, params, use_order
             )
             results.append((offset, page, meta))
-            if not page or (total is None and len(page) < page_size):
+            # Página corta/vacía termina el lote aunque metadata.total diga lo contrario.
+            if not page or len(page) < page_size:
                 break
     else:
         semaphore = asyncio.Semaphore(client.settings.sync_max_concurrent)
@@ -187,12 +211,25 @@ async def fetch_page_batch(
             if meta and "total" in meta:
                 total = int(meta["total"])
                 break
-    accepted_results, intermediate_gap = _contiguous_prefix(
-        results,
-        start_offset=start_offset,
-        page_size=page_size,
-        total=total,
-    )
+
+    # Detectar repetición sobre el lote crudo (antes de truncar por huecos).
+    stuck_repeat = _detect_repeated_pages(results)
+    if stuck_repeat:
+        logger.warning(
+            "Paginación trabada en %s: páginas repetidas desde offset=%s",
+            endpoint,
+            start_offset,
+        )
+        accepted_results = [results[0]] if results else []
+        intermediate_gap = False
+    else:
+        accepted_results, intermediate_gap = _contiguous_prefix(
+            results,
+            start_offset=start_offset,
+            page_size=page_size,
+            total=total,
+        )
+
     pages_fetched = 0
     records_extracted = 0
     for offset, page, meta in accepted_results:
@@ -211,6 +248,9 @@ async def fetch_page_batch(
         total=total,
         start_offset=start_offset,
     )
+    if stuck_repeat:
+        completed = True
+        next_offset = 0
     if intermediate_gap:
         completed = False
     first_id, last_id = _page_extremes(accepted_results)

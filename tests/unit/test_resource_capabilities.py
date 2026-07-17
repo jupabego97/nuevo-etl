@@ -61,3 +61,12 @@ def test_new_typed_loaders_declared(settings):
         assert resource is not None
         assert resource.has_typed_loader is True
         assert resource.parser is not None
+
+
+def test_categories_are_plain_snapshot_not_paginated(settings):
+    resource = resource_by_name("categories")
+    assert resource is not None
+    assert resource.supports_pagination is False
+    assert resource.supports_metadata is False
+    assert resource.extra_params.get("format") == "plain"
+    assert resource.order_field == ""

@@ -376,6 +376,12 @@ RESOURCE_REGISTRY: list[ResourceDefinition] = [
         ResourceGroup.ACCOUNTING,
         SyncStrategy.FULL,
         feature_flag="enable_accounting",
+        # Alegra /categories no pagina con start/limit; default tree solo
+        # devolvía ~6 raíces y el backfill avanzaba offsets indefinidamente.
+        order_field="",
+        extra_params={"format": "plain"},
+        supports_pagination=False,
+        supports_metadata=False,
         optional=True,
         source_only=True,
         priority=ResourcePriority.LOW,

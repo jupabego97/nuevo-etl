@@ -25,7 +25,10 @@ async def test_fetch_page_batch_concurrent_offsets(settings, httpx_mock):
     for start in (0, 30, 60):
         httpx_mock.add_response(
             method="GET",
-            json={"data": [{"id": str(start + 1)}], "metadata": {"total": 90}},
+            json={
+                "data": [{"id": str(start + i)} for i in range(30)],
+                "metadata": {"total": 90},
+            },
         )
 
     pages = []
@@ -44,16 +47,19 @@ async def test_fetch_page_batch_concurrent_offsets(settings, httpx_mock):
         )
 
     assert result.pages_fetched == 3
-    assert result.records_extracted == 3
+    assert result.records_extracted == 90
     assert result.completed is True
-    assert pages == [(0, 1), (30, 1), (60, 1)]
+    assert pages == [(0, 30), (30, 30), (60, 30)]
 
 
 @pytest.mark.asyncio
 async def test_fetch_page_batch_resumes_from_offset(settings, httpx_mock):
     httpx_mock.add_response(
         method="GET",
-        json={"data": [{"id": "31"}], "metadata": {"total": 90}},
+        json={
+            "data": [{"id": str(30 + i)} for i in range(30)],
+            "metadata": {"total": 90},
+        },
     )
 
     async with AlegraClient(settings) as client:
