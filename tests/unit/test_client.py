@@ -80,3 +80,24 @@ async def test_get_by_date_preserves_business_filters_on_fallback(settings, http
     assert len(requests) == 2
     assert requests[1].url.params["type"] == "in"
     assert requests[1].url.params["date"] == "2022-01-01"
+
+
+@pytest.mark.asyncio
+async def test_get_page_unwraps_results_total_envelope(settings, httpx_mock):
+    """Alegra /taxes responde {results, total}; no debe tratarse como un solo registro."""
+    httpx_mock.add_response(
+        method="GET",
+        json={
+            "results": [
+                {"id": "1", "name": "IVA", "percentage": 19},
+                {"id": "2", "name": "IVA", "percentage": 5},
+            ],
+            "total": 2,
+        },
+    )
+
+    async with AlegraClient(settings) as client:
+        page, meta = await client.get_page("taxes")
+
+    assert [record["id"] for record in page] == ["1", "2"]
+    assert meta == {"total": 2}

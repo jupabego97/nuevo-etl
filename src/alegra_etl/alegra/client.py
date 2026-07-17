@@ -130,6 +130,12 @@ class AlegraClient:
             records = body.get("data") or []
             meta = body.get("metadata")
             return list(records), meta if isinstance(meta, dict) else None
+        # Algunos endpoints (p.ej. /taxes) usan {results, total} en lugar de {data, metadata}.
+        if isinstance(body, dict) and "results" in body and isinstance(body.get("results"), list):
+            records = body.get("results") or []
+            total = body.get("total")
+            meta = {"total": int(total)} if total is not None else None
+            return list(records), meta
         if isinstance(body, list):
             return body, None
         # Endpoints como /company devuelven un objeto único.
